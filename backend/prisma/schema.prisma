@@ -1,0 +1,172 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Rol {
+  id       Int       @id @default(autoincrement())
+  nombre   String    @unique
+  usuarios Usuario[]
+}
+
+model Usuario {
+  id            Int         @id @default(autoincrement())
+  rol_id        Int
+  rut           String      @unique
+  nombre        String
+  password_hash String
+  activo        Boolean     @default(true)
+  rol           Rol         @relation(fields: [rol_id], references: [id])
+  turnos        TurnoCaja[]
+}
+
+enum TipoPDV {
+  BODEGA
+  LOCAL
+}
+
+model PDV {
+  id                  Int             @id @default(autoincrement())
+  nombre              String
+  tipo                TipoPDV
+  activo              Boolean         @default(true)
+  inventario          Inventario[]
+  turnos              TurnoCaja[]
+  movimientos_origen  MovimientoInv[] @relation("PDVOrigen")
+  movimientos_destino MovimientoInv[] @relation("PDVDestino")
+}
+
+model Categoria {
+  id        Int        @id @default(autoincrement())
+  nombre    String     @unique
+  productos Producto[]
+}
+
+model Producto {
+  id           Int             @id @default(autoincrement())
+  categoria_id Int
+  nombre       String
+  precio_venta Int
+  costo        Int
+  activo       Boolean         @default(true)
+  categoria    Categoria       @relation(fields: [categoria_id], references: [id])
+  inventarios  Inventario[]
+  ventas       VentaDetalle[]
+  movimientos  MovimientoInv[]
+}
+
+model Inventario {
+  id            Int      @id @default(autoincrement())
+  pdv_id        Int
+  producto_id   Int
+  stock_actual  Int      @default(0)
+  stock_critico Int      @default(0)
+  pdv           PDV      @relation(fields: [pdv_id], references: [id])
+  producto      Producto @relation(fields: [producto_id], references: [id])
+
+  @@unique([pdv_id, producto_id])
+}
+
+enum EstadoTurno {
+  ABIERTO
+  CERRADO
+}
+
+model TurnoCaja {
+  id                 Int          @id @default(autoincrement())
+  pdv_id             Int
+  usuario_id         Int
+  fecha_apertura     DateTime     @default(now())
+  fecha_cierre       DateTime?
+  saldo_inicial      Int          @default(0)
+  efectivo_declarado Int?
+  diferencia_caja    Int?
+  estado             EstadoTurno  @default(ABIERTO)
+  pdv                PDV          @relation(fields: [pdv_id], references: [id])
+  usuario            Usuario      @relation(fields: [usuario_id], references: [id])
+  ventas             Venta[]
+  gastos             GastoTurno[]
+  depositos          Deposito[]
+}
+
+model Venta {
+  id         Int            @id @default(autoincrement())
+  turno_id   Int
+  fecha_hora DateTime       @default(now())
+  total      Int
+  turno      TurnoCaja      @relation(fields: [turno_id], references: [id])
+  detalles   VentaDetalle[]
+  pagos      PagoVenta[]
+}
+
+model VentaDetalle {
+  id              Int      @id @default(autoincrement())
+  venta_id        Int
+  producto_id     Int
+  cantidad        Int
+  precio_unitario Int
+  subtotal        Int
+  venta           Venta    @relation(fields: [venta_id], references: [id])
+  producto        Producto @relation(fields: [producto_id], references: [id])
+}
+
+enum MetodoPago {
+  EFECTIVO
+  TARJETA
+  TRANSFERENCIA
+}
+
+model PagoVenta {
+  id       Int        @id @default(autoincrement())
+  venta_id Int
+  metodo   MetodoPago
+  monto    Int
+  venta    Venta      @relation(fields: [venta_id], references: [id])
+}
+
+model GastoTurno {
+  id          Int       @id @default(autoincrement())
+  turno_id    Int
+  descripcion String
+  monto       Int
+  turno       TurnoCaja @relation(fields: [turno_id], references: [id])
+}
+
+model Deposito {
+  id            Int       @id @default(autoincrement())
+  turno_id      Int
+  monto_teorico Int
+  monto_real    Int
+  fecha         DateTime       @default(now())
+  estado        EstadoDeposito @default(PENDIENTE)
+  turno         TurnoCaja @relation(fields: [turno_id], references: [id])
+}
+
+enum EstadoDeposito {
+  PENDIENTE
+  CONFIRMADO
+}
+
+enum TipoMovimiento {
+  INGRESO
+  TRASPASO
+  VENTA
+  MERMA
+}
+
+model MovimientoInv {
+  id             Int            @id @default(autoincrement())
+  producto_id    Int
+  pdv_origen_id  Int?
+  pdv_destino_id Int?
+  tipo           TipoMovimiento
+  cantidad       Int
+  fecha          DateTime       @default(now())
+  producto       Producto       @relation(fields: [producto_id], references: [id])
+  pdv_origen     PDV?           @relation("PDVOrigen", fields: [pdv_origen_id], references: [id])
+  pdv_destino    PDV?           @relation("PDVDestino", fields: [pdv_destino_id], references: [id])
+}
