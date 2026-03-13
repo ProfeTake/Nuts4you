@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from "react";
 import { useMenuNav } from "@/componentes/SideNav";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { formatearCLP } from "@/hooks/useCarrito";
 
