@@ -54,7 +54,7 @@ export interface EstadoAuth {
 // ─── Navegación ─────────────────────────────────────────────────────────────
 
 // Páginas disponibles en el SideNav del vendedor
-export type PaginaVendedor = "pos" | "inventario" | "historial" | "cierre-caja";
+export type PaginaVendedor = "pos" | "inventario" | "historial" | "cierre-caja" | "registro-diario";
 
 // ─── Apertura de turno ──────────────────────────────────────────────────────
 

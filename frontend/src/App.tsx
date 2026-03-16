@@ -8,6 +8,7 @@ import POSDashboard from "@/paginas/POSDashboard";
 import InventarioPDV from "@/paginas/InventarioPDV";
 import HistorialVentas from "@/paginas/HistorialVentas";
 import CierreCaja from "@/paginas/CierreCaja";
+import { DailyBranchReport } from "@/componentes/admin";
 import type { PaginaVendedor, UsuarioSesion, PDVActivo } from "@/tipos/pos.tipos";
 
 // ─── Subcomponente: POS autenticado ─────────────────────────────────────────
@@ -47,6 +48,8 @@ function POSAutenticado({ usuario, pdv, horaIngreso }: POSAutenticadoProps) {
         return <HistorialVentas />;
       case "cierre-caja":
         return <CierreCaja />;
+      case "registro-diario":
+        return <DailyBranchReport />;
     }
   };
 
