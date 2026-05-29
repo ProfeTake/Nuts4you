@@ -3,11 +3,6 @@
 import { useCallback, useState } from "react";
 import type { EstadoCarrito, ItemCarrito, Producto } from "@/tipos/pos.tipos";
 
-// Formatea un número entero CLP a formato chileno: $1.500
-export function formatearCLP(monto: number): string {
-  return "$" + monto.toLocaleString("es-CL");
-}
-
 export function useCarrito() {
   const [carrito, setCarrito] = useState<EstadoCarrito>({
     items: [],

@@ -10,7 +10,11 @@ import manejarErrores from "./middlewares/manejarErrores";
 const app = express();
 
 // Middlewares globales
-app.use(cors());
+const origenesPermitidos = entorno.nodoEntorno === "production" && entorno.frontendUrl
+  ? [entorno.frontendUrl]
+  : true; // development: permite cualquier origen
+
+app.use(cors({ origin: origenesPermitidos }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

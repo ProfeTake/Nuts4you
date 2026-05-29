@@ -1,32 +1,49 @@
-// Página: Historial de Ventas
+// Página: Historial de Ventas del turno activo
+// Fuente primaria: GET /api/pos/ventas?turnoId= (API real)
+// Fallback: ventas locales del store (offline o sin turno activo)
 
 import { useState, useMemo } from "react";
-import { useMenuNav } from "@/componentes/SideNav";
+import { useQuery } from "@tanstack/react-query";
+import { useMenuNav } from "@/componentes/layout/BarraLateral";
 import { Input } from "@/components/ui/input";
-import { formatearCLP } from "@/hooks/useCarrito";
+import { formatearCLP } from "@/lib/money";
+import { useCajaStore } from "@/store/caja.store";
+import { apiGet } from "@/lib/api";
+import { Loader2, Menu, X, ChevronLeft, ChevronRight } from "lucide-react";
+import type { MetodoPago, VentaLocal } from "@/tipos/pos.tipos";
 
-// ─── Tipos ───────────────────────────────────────────────────────────────────
+// ─── Tipos de la API ──────────────────────────────────────────────────────────
 
-type MetodoPago = "efectivo" | "debito" | "credito" | "transferencia";
-
-interface ItemVenta {
-  nombre: string;
-  categoria: string;
-  cantidad: number;
-  precioUnitario: number;
+interface VentaAPI {
+  id:         number;
+  turnoId:    number;
+  total:      number;
+  folioSII:   number | null;
+  metodoPago: string;
+  horaVenta:  string;
+  items: {
+    productoId:     number;
+    nombre:         string;
+    categoria:      string;
+    cantidad:       number;
+    precioUnitario: number;
+  }[];
 }
 
-interface VentaHistorial {
-  id: number;
-  fecha: string;   // "2026-03-12"
-  hora: string;    // "14:20"
-  items: ItemVenta[];
-  total: number;
-  metodoPago: MetodoPago;
-  vendedor: string;
+function mapearVentaAPI(v: VentaAPI): VentaLocal {
+  return {
+    id:             v.id,
+    turnoId:        v.turnoId,
+    vendedorNombre: "—",
+    total:          v.total,
+    folioSII:       v.folioSII,
+    metodoPago:     v.metodoPago as MetodoPago,
+    horaVenta:      v.horaVenta,
+    items:          v.items,
+  };
 }
 
-// ─── Mock de ventas ───────────────────────────────────────────────────────────
+// ─── Constantes visuales ─────────────────────────────────────────────────────
 
 const METODO_LABELS: Record<MetodoPago, string> = {
   efectivo:      "Efectivo",
@@ -42,124 +59,65 @@ const METODO_COLORES: Record<MetodoPago, string> = {
   transferencia: "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400",
 };
 
-/** Texto compacto para la columna Item: "2× Paq de Maní, 1× Kapo" (máx 2, luego "+N más") */
-function resumenItems(items: ItemVenta[]): string {
+function resumenItems(items: VentaLocal["items"]): string {
   const primeros = items.slice(0, 2).map((it) => `${it.cantidad}× ${it.nombre}`).join(", ");
   if (items.length <= 2) return primeros;
   return `${primeros} +${items.length - 2} más`;
 }
 
-function generarVentas(): VentaHistorial[] {
-  const catalogo = [
-    { nombre: "M de Maní",        categoria: "Granel",   precio: 1500 },
-    { nombre: "M de Almendras",   categoria: "Granel",   precio: 3500 },
-    { nombre: "M de Nueces",      categoria: "Granel",   precio: 3000 },
-    { nombre: "M de Promo",       categoria: "Granel",   precio: 2000 },
-    { nombre: "Paq de Maní",      categoria: "Paquetes", precio: 2500 },
-    { nombre: "Paq de Almendras", categoria: "Paquetes", precio: 4500 },
-    { nombre: "Paq de Nueces",    categoria: "Paquetes", precio: 4000 },
-    { nombre: "Paq de Promo",     categoria: "Paquetes", precio: 3000 },
-    { nombre: "Agua Con Gas",     categoria: "Bebidas",  precio: 1200 },
-    { nombre: "Agua Sin Gas",     categoria: "Bebidas",  precio: 1000 },
-    { nombre: "Energéticas",      categoria: "Bebidas",  precio: 2000 },
-    { nombre: "Bebidas",          categoria: "Bebidas",  precio: 1500 },
-    { nombre: "Kapo",             categoria: "Bebidas",  precio:  800 },
-  ];
-  const metodos: MetodoPago[] = ["efectivo", "debito", "credito", "transferencia"];
-  const vendedores = ["Carlos Muñoz", "Ana Torres"];
-  const fechas = ["2026-03-12", "2026-03-11", "2026-03-10", "2026-03-09", "2026-03-08"];
-  const horas  = ["09:15","09:42","10:03","10:27","11:00","11:33","12:05","12:48",
-                   "13:10","13:55","14:20","14:47","15:13","15:40","16:00","16:30"];
-
-  return Array.from({ length: 40 }, (_, i) => {
-    // 1–3 productos distintos por venta
-    const nItems = (i % 3) + 1;
-    const items: ItemVenta[] = Array.from({ length: nItems }, (__, j) => {
-      const prod = catalogo[(i * 3 + j * 7) % catalogo.length];
-      const cant = (j % 2) + 1;
-      return { nombre: prod.nombre, categoria: prod.categoria, cantidad: cant, precioUnitario: prod.precio };
-    });
-    const total = items.reduce((s, it) => s + it.cantidad * it.precioUnitario, 0);
-    return {
-      id: i + 1,
-      fecha: fechas[i % fechas.length],
-      hora:  horas[i % horas.length],
-      items,
-      total,
-      metodoPago: metodos[i % metodos.length],
-      vendedor:   vendedores[i % vendedores.length],
-    };
-  }).sort((a, b) => (b.fecha + b.hora).localeCompare(a.fecha + a.hora));
-}
-
-const VENTAS_MOCK = generarVentas();
 const POR_PAGINA = 25;
-
-// ─── Iconos ───────────────────────────────────────────────────────────────────
-
-function IconoMenu() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="4" x2="20" y1="12" y2="12" />
-      <line x1="4" x2="20" y1="6" y2="6" />
-      <line x1="4" x2="20" y1="18" y2="18" />
-    </svg>
-  );
-}
-
-function IconoCerrar() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-    </svg>
-  );
-}
-
-function IconoChevron({ dir }: { dir: "left" | "right" }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      {dir === "left" ? <path d="m15 18-6-6 6-6" /> : <path d="m9 18 6-6-6-6" />}
-    </svg>
-  );
-}
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function HistorialVentas() {
   const { abrirMenu } = useMenuNav();
+  const turnoId     = useCajaStore((s) => s.turno?.id);
+  const ventasLocal = useCajaStore((s) => s.ventas);
 
   const [busqueda, setBusqueda]               = useState("");
-  const [filtroFecha, setFiltroFecha]          = useState("");
-  const [filtroMetodo, setFiltroMetodo]        = useState<MetodoPago | "">("");
-  const [filtroCategoria, setFiltroCategoria]  = useState("");
-  const [pagina, setPagina]                    = useState(1);
-  const [ventaSeleccionada, setVentaSeleccionada] = useState<VentaHistorial | null>(null);
+  const [filtroMetodo, setFiltroMetodo]       = useState<MetodoPago | "">("");
+  const [filtroCategoria, setFiltroCategoria] = useState("");
+  const [pagina, setPagina]                   = useState(1);
+  const [ventaSeleccionada, setVentaSeleccionada] = useState<VentaLocal | null>(null);
 
-  const categorias = [...new Set(VENTAS_MOCK.flatMap((v) => v.items.map((it) => it.categoria)))];
+  // ── Fetch desde API real ──
+  const { data: ventasAPI, isLoading } = useQuery({
+    queryKey:  ["pos", "ventas", turnoId],
+    queryFn:   () =>
+      apiGet<{ data: VentaAPI[] }>(`/pos/ventas?turnoId=${turnoId}`)
+        .then((r) => r.data.map(mapearVentaAPI)),
+    enabled:   !!turnoId,
+    staleTime: 10_000,
+  });
+
+  // Usar API cuando está disponible; sino, store local
+  const ventas: VentaLocal[] = ventasAPI ?? [...ventasLocal].reverse();
+
+  const categorias = useMemo(
+    () => [...new Set(ventas.flatMap((v) => v.items.map((it) => it.categoria)))],
+    [ventas]
+  );
 
   const ventasFiltradas = useMemo(() => {
     const texto = busqueda.toLowerCase();
-    return VENTAS_MOCK.filter((v) => {
+    return ventas.filter((v) => {
       if (busqueda && !v.items.some((it) => it.nombre.toLowerCase().includes(texto)) &&
-          !v.vendedor.toLowerCase().includes(texto)) return false;
-      if (filtroFecha && v.fecha !== filtroFecha) return false;
+          !v.vendedorNombre.toLowerCase().includes(texto)) return false;
       if (filtroMetodo && v.metodoPago !== filtroMetodo) return false;
       if (filtroCategoria && !v.items.some((it) => it.categoria === filtroCategoria)) return false;
       return true;
     });
-  }, [busqueda, filtroFecha, filtroMetodo, filtroCategoria]);
+  }, [ventas, busqueda, filtroMetodo, filtroCategoria]);
 
-  const totalPaginas = Math.max(1, Math.ceil(ventasFiltradas.length / POR_PAGINA));
-  const paginaActual = Math.min(pagina, totalPaginas);
-  const ventasPagina = ventasFiltradas.slice((paginaActual - 1) * POR_PAGINA, paginaActual * POR_PAGINA);
-
+  const totalPaginas  = Math.max(1, Math.ceil(ventasFiltradas.length / POR_PAGINA));
+  const paginaActual  = Math.min(pagina, totalPaginas);
+  const ventasPagina  = ventasFiltradas.slice((paginaActual - 1) * POR_PAGINA, paginaActual * POR_PAGINA);
   const totalFiltrado = ventasFiltradas.reduce((s, v) => s + v.total, 0);
 
   const limpiarFiltros = () => {
-    setBusqueda(""); setFiltroFecha(""); setFiltroMetodo(""); setFiltroCategoria(""); setPagina(1);
+    setBusqueda(""); setFiltroMetodo(""); setFiltroCategoria(""); setPagina(1);
   };
-
-  const hayFiltros = busqueda || filtroFecha || filtroMetodo || filtroCategoria;
+  const hayFiltros = busqueda || filtroMetodo || filtroCategoria;
 
   return (
     <div className="flex h-full flex-col">
@@ -167,37 +125,30 @@ export default function HistorialVentas() {
       <header className="flex items-center gap-3 border-b bg-background px-4 py-3 lg:hidden">
         <button onClick={abrirMenu} aria-label="Abrir menú"
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground">
-          <IconoMenu />
+          <Menu size={20} />
         </button>
-        <button onClick={abrirMenu} className="text-base font-semibold text-foreground hover:text-primary transition-colors">
-          Historial de Ventas
-        </button>
+        <span className="text-base font-semibold text-foreground">Historial de Ventas</span>
       </header>
 
       {/* Título desktop */}
       <div className="hidden lg:flex items-baseline gap-3 px-6 pt-5 pb-1">
         <h1 className="text-xl font-bold text-foreground">Historial de Ventas</h1>
         <span className="text-sm text-muted-foreground">{ventasFiltradas.length} registros</span>
+        {ventasAPI && (
+          <span className="text-xs text-emerald-600 font-medium">● en línea</span>
+        )}
       </div>
 
       {/* Filtros */}
       <div className="shrink-0 px-4 py-3 space-y-2 border-b">
-        {/* Fila 1: búsqueda + fecha */}
         <div className="flex gap-2">
           <Input
-            placeholder="Buscar producto o vendedor…"
+            placeholder="Buscar producto…"
             value={busqueda}
             onChange={(e) => { setBusqueda(e.target.value); setPagina(1); }}
             className="flex-1 h-9 text-sm"
           />
-          <input
-            type="date"
-            value={filtroFecha}
-            onChange={(e) => { setFiltroFecha(e.target.value); setPagina(1); }}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
-          />
         </div>
-        {/* Fila 2: método de pago + categoría + limpiar */}
         <div className="flex flex-wrap gap-2">
           <select
             value={filtroMetodo}
@@ -210,14 +161,16 @@ export default function HistorialVentas() {
             <option value="credito">Crédito</option>
             <option value="transferencia">Transferencia</option>
           </select>
-          <select
-            value={filtroCategoria}
-            onChange={(e) => { setFiltroCategoria(e.target.value); setPagina(1); }}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">Todas las categorías</option>
-            {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
+          {categorias.length > 0 && (
+            <select
+              value={filtroCategoria}
+              onChange={(e) => { setFiltroCategoria(e.target.value); setPagina(1); }}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">Todas las categorías</option>
+              {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
           {hayFiltros && (
             <button onClick={limpiarFiltros}
               className="h-9 rounded-md border border-border px-3 text-sm text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors">
@@ -232,9 +185,18 @@ export default function HistorialVentas() {
         </div>
       </div>
 
-      {/* Tabla — scrollable */}
+      {/* Contenido */}
       <div className="flex-1 overflow-auto px-4 py-3">
-        {ventasPagina.length === 0 ? (
+        {isLoading ? (
+          <div className="flex h-40 items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 size={18} className="animate-spin" />
+            Cargando ventas…
+          </div>
+        ) : ventas.length === 0 ? (
+          <div className="flex h-40 items-center justify-center text-sm text-muted-foreground border border-dashed rounded-xl">
+            Aún no hay ventas en este turno
+          </div>
+        ) : ventasPagina.length === 0 ? (
           <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
             No se encontraron ventas con los filtros aplicados.
           </div>
@@ -243,28 +205,28 @@ export default function HistorialVentas() {
             <thead className="sticky top-0 z-10">
               <tr className="bg-muted">
                 <th className="border border-border px-2 py-2 text-left text-[11px] font-bold uppercase tracking-wider">#</th>
-                <th className="border border-border px-2 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Fecha</th>
-                <th className="border border-border px-2 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Item</th>
+                <th className="border border-border px-2 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Hora</th>
+                <th className="border border-border px-2 py-2 text-center text-[11px] font-bold uppercase tracking-wider hidden sm:table-cell">Boleta</th>
+                <th className="border border-border px-2 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Items</th>
                 <th className="border border-border px-2 py-2 text-right text-[11px] font-bold uppercase tracking-wider">Total</th>
                 <th className="border border-border px-2 py-2 text-center text-[11px] font-bold uppercase tracking-wider">Pago</th>
               </tr>
             </thead>
             <tbody>
               {ventasPagina.map((v) => (
-                <tr
-                  key={v.id}
-                  onClick={() => setVentaSeleccionada(v)}
-                  className="cursor-pointer bg-background hover:bg-muted/40 transition-colors"
-                >
+                <tr key={v.id} onClick={() => setVentaSeleccionada(v)}
+                  className="cursor-pointer bg-background hover:bg-muted/40 transition-colors">
                   <td className="border border-border px-2 py-2 text-xs tabular-nums text-muted-foreground">{v.id}</td>
-                  <td className="border border-border px-2 py-2 text-xs tabular-nums whitespace-nowrap">
-                    <span className="block">{v.fecha.split("-").reverse().join("/")}</span>
-                    <span className="text-muted-foreground">{v.hora}</span>
+                  <td className="border border-border px-2 py-2 text-xs tabular-nums whitespace-nowrap text-muted-foreground">{v.horaVenta}</td>
+                  <td className="border border-border px-2 py-2 text-center text-xs tabular-nums hidden sm:table-cell">
+                    {v.folioSII ? (
+                      <span className="font-medium text-foreground">{v.folioSII}</span>
+                    ) : (
+                      <span className="text-muted-foreground/40">—</span>
+                    )}
                   </td>
                   <td className="border border-border px-2 py-2">
-                    <span className="block text-sm font-medium text-foreground leading-snug">
-                      {resumenItems(v.items)}
-                    </span>
+                    <span className="block text-sm font-medium text-foreground leading-snug">{resumenItems(v.items)}</span>
                     {v.items.length > 1 && (
                       <span className="text-[10px] text-muted-foreground">{v.items.length} productos · click para ver detalle</span>
                     )}
@@ -289,12 +251,9 @@ export default function HistorialVentas() {
             Página {paginaActual} de {totalPaginas} · {ventasFiltradas.length} registros
           </span>
           <div className="flex items-center gap-1">
-            <button
-              disabled={paginaActual === 1}
-              onClick={() => setPagina((p) => p - 1)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <IconoChevron dir="left" />
+            <button disabled={paginaActual === 1} onClick={() => setPagina((p) => p - 1)}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed">
+              <ChevronLeft size={16} />
             </button>
             {Array.from({ length: totalPaginas }, (_, i) => i + 1)
               .filter((n) => n === 1 || n === totalPaginas || Math.abs(n - paginaActual) <= 1)
@@ -307,65 +266,47 @@ export default function HistorialVentas() {
                 n === "…" ? (
                   <span key={`e-${i}`} className="px-1 text-muted-foreground text-sm">…</span>
                 ) : (
-                  <button
-                    key={n}
-                    onClick={() => setPagina(n as number)}
+                  <button key={n} onClick={() => setPagina(n as number)}
                     className={`h-8 w-8 rounded-lg border text-sm font-medium transition-colors ${
                       paginaActual === n
                         ? "border-primary bg-primary/10 text-primary"
                         : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }`}
-                  >
+                    }`}>
                     {n}
                   </button>
                 )
               )}
-            <button
-              disabled={paginaActual === totalPaginas}
-              onClick={() => setPagina((p) => p + 1)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <IconoChevron dir="right" />
+            <button disabled={paginaActual === totalPaginas} onClick={() => setPagina((p) => p + 1)}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed">
+              <ChevronRight size={16} />
             </button>
           </div>
         </div>
       )}
+
       {/* Modal detalle de venta */}
       {ventaSeleccionada && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
-          onClick={() => setVentaSeleccionada(null)}
-        >
-          <div
-            className="w-full max-w-sm rounded-2xl border bg-background shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+          onClick={() => setVentaSeleccionada(null)}>
+          <div className="w-full max-w-sm rounded-2xl border bg-background shadow-2xl"
+            onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b px-5 py-4">
               <div>
-                <p className="text-xs text-muted-foreground">
-                  Venta #{ventaSeleccionada.id} · {ventaSeleccionada.fecha.split("-").reverse().join("/")} {ventaSeleccionada.hora}
-                </p>
+                <p className="text-xs text-muted-foreground">Venta #{ventaSeleccionada.id} · {ventaSeleccionada.horaVenta}</p>
                 <h3 className="text-base font-bold text-foreground">Detalle de venta</h3>
               </div>
-              <button
-                onClick={() => setVentaSeleccionada(null)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-              >
-                <IconoCerrar />
+              <button onClick={() => setVentaSeleccionada(null)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+                <X size={18} />
               </button>
             </div>
-
-            {/* Lista de productos */}
             <div className="px-5 py-4 space-y-1">
               <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Productos vendidos</p>
-              {/* Cabecera columnas */}
               <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 border-b pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 <span>Item</span>
                 <span className="text-right">Cant.</span>
                 <span className="text-right">Subtotal</span>
               </div>
-              {/* Filas */}
               {ventaSeleccionada.items.map((it, idx) => (
                 <div key={idx} className="grid grid-cols-[1fr_auto_auto] gap-x-3 py-1.5 text-sm border-b border-border/40 last:border-0">
                   <div>
@@ -379,14 +320,10 @@ export default function HistorialVentas() {
                 </div>
               ))}
             </div>
-
-            {/* Footer: total + método + vendedor */}
             <div className="border-t px-5 py-4 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Total</span>
-                <span className="text-xl font-extrabold tabular-nums text-foreground">
-                  {formatearCLP(ventaSeleccionada.total)}
-                </span>
+                <span className="text-xl font-extrabold tabular-nums text-foreground">{formatearCLP(ventaSeleccionada.total)}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Método de pago</span>
@@ -394,10 +331,14 @@ export default function HistorialVentas() {
                   {METODO_LABELS[ventaSeleccionada.metodoPago]}
                 </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Vendedor</span>
-                <span className="text-sm font-medium text-foreground">{ventaSeleccionada.vendedor}</span>
-              </div>
+              {ventaSeleccionada.folioSII && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Boleta SII</span>
+                  <span className="text-sm font-semibold tabular-nums text-foreground">
+                    N° {ventaSeleccionada.folioSII}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -405,5 +346,3 @@ export default function HistorialVentas() {
     </div>
   );
 }
-
-

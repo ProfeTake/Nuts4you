@@ -1,4 +1,5 @@
 // Datos mock de prueba para el POS
+// TODO: Reemplazar con llamadas reales a la API (Fase 3)
 
 import type {
   Categoria,
@@ -9,120 +10,96 @@ import type {
 } from "@/tipos/pos.tipos";
 
 // ─── Credenciales de acceso mock ─────────────────────────────────────────────
-// Contraseña en texto plano — sólo para mock local
-// TODO: Reemplazar con autenticación JWT desde el backend
 
 export interface CredencialMock {
-  rut: string;          // Con formato: XX.XXX.XXX-X
-  passwordHash: string; // Plain text mock
+  rut: string;
+  passwordHash: string;
   usuario: UsuarioSesion;
   pdv: PDVActivo;
 }
 
 export const credencialesMock: CredencialMock[] = [
   {
-    rut: "12.345.678-9",
+    rut: "12345678-9",
     passwordHash: "1234",
-    usuario: { id: 1, rut: "12.345.678-9", nombre: "Carlos Muñoz",  rol: "VENDEDOR" },
-    pdv:     { id: 1, nombre: "Local Mall Plaza",  tipo: "LOCAL" },
+    usuario: { id: 1, rut: "12345678-9", nombre: "Carlos Muñoz",   rol: "VENDEDOR" },
+    pdv:     { id: 1, nombre: "Mall Patio",             tipo: "PUNTO_VENTA", activo: true },
   },
   {
-    rut: "98.765.432-1",
+    rut: "98765432-1",
     passwordHash: "1234",
-    usuario: { id: 2, rut: "98.765.432-1", nombre: "Ana Torres",    rol: "VENDEDOR" },
-    pdv:     { id: 2, nombre: "Kiosko Central",    tipo: "LOCAL" },
+    usuario: { id: 2, rut: "98765432-1", nombre: "Ana Torres",     rol: "VENDEDOR" },
+    pdv:     { id: 2, nombre: "Paseo Independencia",    tipo: "PUNTO_VENTA", activo: true },
   },
   {
-    rut: "11.111.111-1",
+    rut: "11111111-1",
     passwordHash: "admin",
-    usuario: { id: 3, rut: "11.111.111-1", nombre: "Martín Reyes",  rol: "ADMIN" },
-    pdv:     { id: 1, nombre: "Local Mall Plaza",  tipo: "LOCAL" },
+    usuario: { id: 3, rut: "11111111-1", nombre: "Martín Reyes",   rol: "ADMIN" },
+    pdv:     { id: 1, nombre: "Mall Patio",             tipo: "PUNTO_VENTA", activo: true },
+  },
+  {
+    rut: "22222222-2",
+    passwordHash: "1234",
+    usuario: { id: 4, rut: "22222222-2", nombre: "Sthefany Reyes", rol: "SUPERVISOR" },
+    pdv:     { id: 1, nombre: "Mall Patio",             tipo: "PUNTO_VENTA", activo: true },
   },
 ];
 
+// ─── Categorías reales del negocio ───────────────────────────────────────────
 
 export const categoriasMock: Categoria[] = [
-  { id: 1, nombre: "Confitados" },
-  { id: 2, nombre: "Líquidos" },
-  { id: 3, nombre: "Frutos Secos" },
+  { id: 1, nombre: "Mezclas" },
+  { id: 2, nombre: "Paquetes" },
+  { id: 3, nombre: "Promos" },
+  { id: 4, nombre: "Líquidos" },
 ];
+
+// ─── Catálogo real de productos ──────────────────────────────────────────────
 
 export const productosMock: Producto[] = [
-  {
-    id: 1,
-    categoriaId: 1,
-    nombre: "Maní Confitado",
-    precioVenta: 1500,
-    activo: true,
-  },
-  {
-    id: 2,
-    categoriaId: 1,
-    nombre: "Almendras Confitadas",
-    precioVenta: 3500,
-    activo: true,
-  },
-  {
-    id: 3,
-    categoriaId: 3,
-    nombre: "Mix Frutos Secos",
-    precioVenta: 4000,
-    activo: true,
-  },
-  {
-    id: 4,
-    categoriaId: 2,
-    nombre: "Agua Mineral 600ml",
-    precioVenta: 800,
-    activo: true,
-  },
-  {
-    id: 5,
-    categoriaId: 2,
-    nombre: "Jugo Natural 500ml",
-    precioVenta: 1200,
-    activo: true,
-  },
-  {
-    id: 6,
-    categoriaId: 1,
-    nombre: "Maní Promo 2x1",
-    precioVenta: 2000,
-    activo: true,
-  },
-  {
-    id: 7,
-    categoriaId: 3,
-    nombre: "Castañas de Cajú",
-    precioVenta: 5000,
-    activo: true,
-  },
-  {
-    id: 8,
-    categoriaId: 2,
-    nombre: "Bebida Cola 350ml",
-    precioVenta: 900,
-    activo: true,
-  },
+  // Mezclas (materia prima — no tienen precio de venta directo)
+  { id: 1,  categoriaId: 1, nombre: "Mezcla Maní",          precioVenta:    0, activo: true },
+  { id: 2,  categoriaId: 1, nombre: "Mezcla Almendras",      precioVenta:    0, activo: true },
+  { id: 3,  categoriaId: 1, nombre: "Mezcla Nueces",         precioVenta:    0, activo: true },
+  { id: 4,  categoriaId: 1, nombre: "Mezcla Promo",          precioVenta:    0, activo: true },
+  { id: 5,  categoriaId: 1, nombre: "Mezcla Helado",       precioVenta:    0, activo: true },
+  // Paquetes
+  { id: 6,  categoriaId: 2, nombre: "Paquetes Maní",         precioVenta:  800, activo: true },
+  { id: 7,  categoriaId: 2, nombre: "Paquetes Almendras",    precioVenta: 1000, activo: true },
+  { id: 8,  categoriaId: 2, nombre: "Paquetes Nueces",       precioVenta: 1000, activo: true },
+  // Promos (pp)
+  { id: 9,  categoriaId: 3, nombre: "Paquetes Promo",        precioVenta: 1500, activo: true },
+  // Líquidos
+  { id: 10, categoriaId: 4, nombre: "Agua Mineral Con Gas",  precioVenta:  800, activo: true },
+  { id: 11, categoriaId: 4, nombre: "Agua Mineral Sin Gas",  precioVenta:  800, activo: true },
+  { id: 12, categoriaId: 4, nombre: "Energéticas",           precioVenta: 1500, activo: true },
+  { id: 13, categoriaId: 4, nombre: "Bebidas",               precioVenta: 1500, activo: true },
+  { id: 14, categoriaId: 4, nombre: "Jugos Kapo",            precioVenta:  500, activo: true },
+  // Helados
+  { id: 15, categoriaId: 3, nombre: "Helados",               precioVenta: 1000, activo: true },
 ];
 
-// ─── Inventario inicial mock (stock esperado al abrir turno) ────────────────
+// ─── Inventario inicial mock (stock esperado al abrir turno) ─────────────────
 
 export const inventarioInicialMock: ItemInventarioInicial[] = [
-  // Granel (medidas)
-  { productoId: 1,  nombre: "M de Maní",        categoria: "Granel",   inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 2,  nombre: "M de Almendras",   categoria: "Granel",   inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 3,  nombre: "M de Nueces",      categoria: "Granel",   inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 4,  nombre: "M de Promo",       categoria: "Granel",   inicio: 0, ingreso: 0, verificado: false },
+  // Mezclas
+  { productoId: 1,  nombre: "Mezcla Maní",         categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 2,  nombre: "Mezcla Almendras",     categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 3,  nombre: "Mezcla Nueces",        categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 4,  nombre: "Mezcla Promo",         categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 5,  nombre: "Mezcla Helado",      categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
   // Paquetes
-  { productoId: 5,  nombre: "Paq de Maní",      categoria: "Paquetes", inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 6,  nombre: "Paq de Almendras", categoria: "Paquetes", inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 7,  nombre: "Paq de Nueces",    categoria: "Paquetes", inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 8,  nombre: "Paq de Promo",     categoria: "Paquetes", inicio: 0, ingreso: 0, verificado: false },
-  // Bebidas
-  { productoId: 9,  nombre: "Agua Con Gas",     categoria: "Bebidas",  inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 10, nombre: "Agua Sin Gas",     categoria: "Bebidas",  inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 11, nombre: "Energéticas",      categoria: "Bebidas",  inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 12, nombre: "Bebidas",          categoria: "Bebidas",  inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 13, nombre: "Kapo",             categoria: "Bebidas",  inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 6,  nombre: "Paquetes Maní",        categoria: "Paquetes", inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 7,  nombre: "Paquetes Almendras",   categoria: "Paquetes", inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 8,  nombre: "Paquetes Nueces",      categoria: "Paquetes", inicio: 0, ingreso: 0, verificado: false },
+  // Promos
+  { productoId: 9,  nombre: "Promos",               categoria: "Promos",   inicio: 0, ingreso: 0, verificado: false },
+  // Líquidos
+  { productoId: 10, nombre: "Agua Mineral Con Gas", categoria: "Líquidos", inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 11, nombre: "Agua Mineral Sin Gas", categoria: "Líquidos", inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 12, nombre: "Energéticas",          categoria: "Líquidos", inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 13, nombre: "Bebidas",              categoria: "Líquidos", inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 14, nombre: "Jugos Kapo",           categoria: "Líquidos", inicio: 0, ingreso: 0, verificado: false },
+  // Helados
+  { productoId: 15, nombre: "Helados",              categoria: "Promos",   inicio: 0, ingreso: 0, verificado: false },
 ];

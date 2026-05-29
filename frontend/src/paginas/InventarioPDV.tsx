@@ -2,35 +2,26 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { useMenuNav } from "@/componentes/SideNav";
+import { useMenuNav } from "@/componentes/layout/BarraLateral";
 import { inventarioInicialMock } from "@/datos/mock.datos";
-
-function IconoMenu() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="4" x2="20" y1="12" y2="12" />
-      <line x1="4" x2="20" y1="6" y2="6" />
-      <line x1="4" x2="20" y1="18" y2="18" />
-    </svg>
-  );
-}
-
-function IconoGuardar() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
-      <path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" />
-      <path d="M7 3v4a1 1 0 0 0 1 1h7" />
-    </svg>
-  );
-}
+import { useCajaStore } from "@/store/caja.store";
+import { Menu, Save } from "lucide-react";
 
 export default function InventarioPDV() {
   const { abrirMenu } = useMenuNav();
 
-  // Saldo editable por fila (texto crudo para evitar conflictos de input)
+  // Usa el inventario del turno activo; fallback al mock si no hay turno
+  const { inventarioInicial, inventarioSaldo: saldoGuardado, guardarInventarioSaldo } = useCajaStore();
+  const items = inventarioInicial.length > 0 ? inventarioInicial : inventarioInicialMock;
+
+  // Estado editable del saldo por producto (inicializa desde el store si ya fue guardado)
   const [textosSaldo, setTextosSaldo] = useState<Record<number, string>>(
-    () => Object.fromEntries(inventarioInicialMock.map((i) => [i.productoId, ""]))
+    () => Object.fromEntries(
+      items.map((i) => [
+        i.productoId,
+        saldoGuardado[i.productoId] != null ? String(saldoGuardado[i.productoId]) : "",
+      ])
+    )
   );
 
   const actualizarSaldo = (productoId: number, valor: string) => {
@@ -39,13 +30,18 @@ export default function InventarioPDV() {
   };
 
   const guardarInventario = () => {
-    // TODO: Enviar al backend
+    // Convertir a Record<number, number> y persistir en el store
+    const saldos: Record<number, number> = {};
+    for (const [id, texto] of Object.entries(textosSaldo)) {
+      saldos[Number(id)] = parseInt(texto || "0", 10);
+    }
+    guardarInventarioSaldo(saldos);
     toast.success("Inventario guardado", {
       description: "Los saldos han sido registrados correctamente.",
     });
   };
 
-  const categorias = [...new Set(inventarioInicialMock.map((i) => i.categoria))];
+  const categorias = [...new Set(items.map((i) => i.categoria))];
 
   return (
     <div className="flex h-full flex-col">
@@ -56,7 +52,7 @@ export default function InventarioPDV() {
           aria-label="Abrir menú"
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
         >
-          <IconoMenu />
+          <Menu size={20} />
         </button>
         <button
           onClick={abrirMenu}
@@ -74,16 +70,14 @@ export default function InventarioPDV() {
 
       {/* Botón Guardar + tabla — scrollable */}
       <div className="flex-1 overflow-y-auto px-4 pb-6 pt-3">
-        {/* Botón Guardar inventario */}
         <button
           onClick={guardarInventario}
           className="mb-3 flex items-center gap-2 rounded-lg border border-primary bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
         >
-          <IconoGuardar />
+          <Save size={16} />
           Guardar inventario
         </button>
 
-        {/* Tabla */}
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="bg-muted">
@@ -111,7 +105,7 @@ export default function InventarioPDV() {
                   {cat}
                 </td>
               </tr>,
-              ...inventarioInicialMock
+              ...items
                 .filter((i) => i.categoria === cat)
                 .map((item) => (
                   <tr key={item.productoId} className="bg-background">
@@ -120,7 +114,7 @@ export default function InventarioPDV() {
                     </td>
                     {/* INICIO — solo lectura */}
                     <td className="border border-border px-2 py-1.5 text-center text-sm tabular-nums text-muted-foreground bg-muted/40">
-                      {item.inicio}
+                      {item.inicio > 0 ? item.inicio : ""}
                     </td>
                     {/* ING — solo lectura */}
                     <td className="border border-border px-2 py-1.5 text-center text-sm tabular-nums text-muted-foreground bg-muted/40">

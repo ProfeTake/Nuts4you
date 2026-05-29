@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -n BACK,FRONT -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:all": "concurrently -n BACK,FRONT -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "cd backend && npm run dev",
     "dev:frontend": "cd frontend && npm run dev",
     "build": "concurrently \"npm run build:backend\" \"npm run build:frontend\"",

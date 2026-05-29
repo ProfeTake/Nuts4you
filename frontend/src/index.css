@@ -127,3 +127,17 @@
     @apply font-sans;
     }
 }
+
+@keyframes scan-line {
+  0%   { top: 10%; }
+  50%  { top: 85%; }
+  100% { top: 10%; }
+}
+
+.animate-scan-line {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  animation: scan-line 2s ease-in-out infinite;
+}

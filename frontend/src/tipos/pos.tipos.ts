@@ -2,9 +2,9 @@
 
 // ─── Sesión y contexto del vendedor ─────────────────────────────────────────
 
-export type TipoPDV = "BODEGA" | "LOCAL";
+export type TipoPDV = "BODEGA" | "PUNTO_VENTA";
 export type EstadoTurno = "ABIERTO" | "CERRADO";
-export type RolUsuario = "ADMIN" | "VENDEDOR" | "BODEGUERO";
+export type RolUsuario = "ADMIN" | "SUPERVISOR" | "VENDEDOR" | "BODEGUERO";
 
 export interface UsuarioSesion {
   id: number;
@@ -17,6 +17,7 @@ export interface PDVActivo {
   id: number;
   nombre: string;
   tipo: TipoPDV;
+  activo: boolean;
 }
 
 export interface TurnoActivo {
@@ -54,7 +55,7 @@ export interface EstadoAuth {
 // ─── Navegación ─────────────────────────────────────────────────────────────
 
 // Páginas disponibles en el SideNav del vendedor
-export type PaginaVendedor = "pos" | "inventario" | "historial" | "cierre-caja" | "registro-diario";
+export type PaginaVendedor = "pos" | "solicitudes" | "inventario" | "historial" | "cierre-caja" | "registro-diario";
 
 // ─── Apertura de turno ──────────────────────────────────────────────────────
 
@@ -97,4 +98,60 @@ export interface ItemCarrito {
 export interface EstadoCarrito {
   items: ItemCarrito[];
   total: number;
+}
+
+// ─── Ventas y movimientos de caja ───────────────────────────────────────────
+
+export type MetodoPago = "efectivo" | "debito" | "credito" | "transferencia";
+
+export interface ItemVentaLocal {
+  productoId: number;
+  nombre: string;
+  categoria: string;
+  cantidad: number;
+  precioUnitario: number;
+}
+
+export interface VentaLocal {
+  id: number;
+  turnoId: number;
+  vendedorNombre: string;
+  items: ItemVentaLocal[];
+  total: number;
+  metodoPago: MetodoPago;
+  horaVenta: string; // "HH:MM"
+  folioSII?: number | null;
+}
+
+export interface MovimientoCaja {
+  id: number;
+  backendId?: number; // ID real en BD (undefined = solo local / apertura)
+  tipo: "gasto" | "retiro" | "ingreso";
+  descripcion: string;
+  categoria: string;
+  monto: number;
+  hora: string; // "HH:MM"
+}
+
+// ─── Solicitudes de insumos ─────────────────────────────────────────────────
+
+export type EstadoSolicitud = "PENDIENTE" | "DESPACHADA" | "CONFIRMADA";
+
+export interface ItemSolicitud {
+  id: number;
+  producto: string;
+  categoria: string;
+  cantidad: number;
+}
+
+export interface Solicitud {
+  id: number;
+  pdvNombre: string;
+  pdvId: number;
+  solicitante: string;
+  estado: EstadoSolicitud;
+  notas: string | null;
+  fecha: string;
+  fechaCierre: string | null;
+  items: ItemSolicitud[];
 }

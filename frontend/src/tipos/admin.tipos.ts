@@ -8,21 +8,29 @@ export type Sucursal = "Mall" | "Paseo" | "Open Plaza" | "Rengo" | "Baquedano";
 /** Clave identificadora de cada mezcla */
 export type ClaveMezcla = "MM" | "MA" | "MN" | "MPr";
 
+/**
+ * Fila de control por tipo de mezcla.
+ *
+ * Sección Mezclas (materia prima):
+ *   saldoActualMezcla (readonly) = saldoInicial + ingreso - utilizado
+ *
+ * Sección Paquetes (producto terminado):
+ *   produccion (readonly)   = utilizado × factorConversion
+ *   paqVendidos (readonly)  = saldoInicialPaquetes + produccion + ingresoDirectoPaquetes − saldoFinalPaquetes
+ */
 export interface FilaInsumo {
-  saldoInicial: number;
-  ingreso: number;
-  utilizado: number;
-  // saldoActual se calcula: saldoInicial + ingreso - utilizado
+  // ── Mezclas (materia prima) ──────────────────────────────────────────────
+  saldoInicial: number;              // stock de mezcla al iniciar el turno
+  ingreso: number;                   // mezclas recibidas de bodega en el turno
+  utilizado: number;                 // mezclas procesadas/cocinadas en el turno
+
+  // ── Paquetes (producto terminado) ────────────────────────────────────────
+  saldoInicialPaquetes: number;      // paquetes en stock al iniciar el turno
+  ingresoDirectoPaquetes: number;    // paquetes recibidos de bodega ya preparados
+  saldoFinalPaquetes: number;        // conteo físico de paquetes al cerrar turno
 }
 
 export type ControlInsumos = Record<ClaveMezcla, FilaInsumo>;
-
-// ─── Ventas Confitados ───
-
-export type ClaveConfitado = "mani" | "almendras" | "nueces" | "promos";
-
-/** Cantidad de paquetes vendidos por producto */
-export type VentasConfitados = Record<ClaveConfitado, number>;
 
 // ─── Ventas Líquidos ───
 
@@ -45,7 +53,129 @@ export interface RegistroDiario {
   sucursal: Sucursal | "";
   fecha: string; // ISO date string
   insumos: ControlInsumos;
-  confitados: VentasConfitados;
   liquidos: VentasLiquidos;
   caja: ControlCaja;
+}
+
+// ─── Páginas del panel de administración ───
+
+export type PaginaAdmin =
+  | "dashboard"
+  | "sucursales"
+  | "bodega"
+  | "finanzas"
+  | "personal"
+  | "usuarios";
+
+// ─── Dashboard: ventas por sucursal (gráfico de barras) ───
+
+export interface VentaMensualSucursal {
+  sucursal: string;
+  ventaTotal: number;
+}
+
+// ─── Dashboard: tarjetas de resumen ───
+
+export interface ResumenDashboard {
+  ventaTotalDia: number;
+  pendienteDeposito: number;
+  alertasBodega: number;
+  itemsSinStock: string[];
+}
+
+// ─── Bodega Central ───
+
+export type CategoriaBodega = "mezclas" | "liquidos";
+
+export type EstadoStock =
+  | "STOCK OK"
+  | "POCO STOCK"
+  | "SIN STOCK"
+  | "SOBRESTOCK";
+
+export interface ItemBodega {
+  id: string;
+  item: string;
+  categoria: CategoriaBodega;
+  saldoInicial: number;
+  ingresos: number;
+  utilizadas: number;
+  saldoActual: number; // calculado: saldoInicial + ingresos - utilizadas
+  stockMinimo: number;
+  stockMaximo: number;
+  estado: EstadoStock;
+}
+
+/** Entrega pendiente de bodega a una sucursal */
+export interface EntregaSucursal {
+  id: string;
+  sucursal: Sucursal;
+  item: string;
+  cantidadSolicitada: number;
+  cantidadEntregada: number;
+  fecha: string;
+  estado: "Pendiente" | "Parcial" | "Entregado";
+}
+
+// ─── PDV (punto de venta) ───
+
+export interface PDVItem {
+  id: number;
+  nombre: string;
+  tipo?: string;
+}
+
+// ─── Control de Sucursales ───
+
+export interface MetricasMes {
+  totalMes: number;
+  promedioDiario: number;
+  proyeccionMes: number;
+  diasConVenta: number;
+  diasMes: number;
+  diasTranscurridos: number;
+  categoriasMes: Record<string, number>;
+  faltantesMes: number;
+}
+
+export interface ResumenSucursal {
+  turnoId: number;
+  estado: string;
+  vendedor: string;
+  ventasPorCategoria: Record<string, number>;
+  totalVentas: number;
+  ventaEfectivo: number;
+  efectivoDeclarado: number;
+  diferenciaCaja: number;
+  saldoInicial: number;
+  totalRetiros: number;
+  metricas: MetricasMes;
+}
+
+// ─── Depósitos (Finanzas) ───
+
+export type EstadoDeposito = "Depositado" | "Transferencia" | "No depositado";
+
+export interface FilaDeposito {
+  id: string;
+  fechaVenta: string;
+  sucursal: Sucursal;
+  montoADepositar: number;
+  montoDepositado: number;
+  faltaDepositar: number;
+  estado: EstadoDeposito;
+}
+
+// ─── Sueldos y Personal ───
+
+export interface FilaPersonal {
+  id: string;
+  nombre: string;
+  sucursal: Sucursal;
+  diasTrabajados: number;
+  promedioVentaDiario: number;
+  pagoBase: number;
+  bonos: number;
+  descuentosFaltante: number;
+  totalAPagar: number;
 }

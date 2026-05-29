@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { apiGet } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -23,82 +24,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { formatearCLP } from "@/hooks/useCarrito";
+import { formatearCLP } from "@/lib/money";
 import { inventarioInicialMock } from "@/datos/mock.datos";
 import type {
   SesionPOS,
   PasoApertura,
   ItemInventarioInicial,
 } from "@/tipos/pos.tipos";
-
-// ─── Iconos SVG ─────────────────────────────────────────────────────────────
-
-function IconoTienda() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7" />
-      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
-      <path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4" />
-      <path d="M2 7h20" />
-    </svg>
-  );
-}
-
-function IconoDinero() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect width="20" height="12" x="2" y="6" rx="2" />
-      <circle cx="12" cy="12" r="2" />
-      <path d="M6 12h.01M18 12h.01" />
-    </svg>
-  );
-}
-
-function IconoInventario() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m7.5 4.27 9 5.15" />
-      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
-      <path d="m3.3 7 8.7 5 8.7-5" />
-      <path d="M12 22V12" />
-    </svg>
-  );
-}
-
-function IconoCheck() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 6 9 17l-5-5" />
-    </svg>
-  );
-}
-
-function IconoAlerta() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-      <path d="M12 9v4" />
-      <path d="M12 17h.01" />
-    </svg>
-  );
-}
-
-function IconoFlecha() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M5 12h14" />
-      <path d="m12 5 7 7-7 7" />
-    </svg>
-  );
-}
-
-function IconoContacto() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-    </svg>
-  );
-}
+import { Store, Banknote, Package, Check, AlertTriangle, ArrowRight, Phone } from "lucide-react";
 
 // ─── Constantes ─────────────────────────────────────────────────────────────
 
@@ -117,11 +50,12 @@ const MONTOS_RAPIDOS = [20_000, 50_000, 100_000, 150_000];
 interface AperturaTurnoProps {
   sesion: SesionPOS;
   pasoInicial?: PasoApertura;
-  horaIngreso?: string | null; // ISO string registrado en el login
+  horaIngreso?: string | null;
   onAperturaCompleta: (
     saldoInicial: number,
     inventario: ItemInventarioInicial[]
   ) => void;
+  onVolverAdmin?: () => void;
 }
 
 // ─── Componente principal ────────────────────────────────────────────────────────────
@@ -131,6 +65,7 @@ export default function AperturaTurno({
   pasoInicial = "saldo",
   horaIngreso,
   onAperturaCompleta,
+  onVolverAdmin,
 }: AperturaTurnoProps) {
   const [pasoActual, setPasoActual] = useState<PasoApertura>(pasoInicial);
   const [saldoInicial, setSaldoInicial] = useState(0);
@@ -147,9 +82,26 @@ export default function AperturaTurno({
   const indicePaso = PASOS.indexOf(pasoActual);
   const { usuario, pdv } = sesion;
 
-  // PDV activo: simulamos que siempre está activo para el mock
-  // TODO: Validar con el backend si el PDV está realmente activo
-  const pdvActivo = pdv !== null;
+  // Cargar stock actual del PDV desde la API (saldo del turno anterior)
+  useEffect(() => {
+    if (!pdv?.id) return;
+    apiGet<{ data: { productoId: number; stockActual: number }[] }>(
+      `/inventario/${pdv.id}`
+    ).then(res => {
+      if (!res.data.length) return;
+      setItemsInventario(prev =>
+        prev.map(item => {
+          const stock = res.data.find(s => s.productoId === item.productoId);
+          return stock ? { ...item, inicio: stock.stockActual } : item;
+        })
+      );
+    }).catch(() => {
+      // Sin inventario previo: queda en 0 (primera vez)
+    });
+  }, [pdv?.id]);
+
+  // pdv.activo viene directo del login/me — si el admin desactiva el PDV, el vendedor no puede abrir turno
+  const pdvActivo = pdv?.activo === true;
 
   // Focus en input de saldo al llegar al paso 2
   useEffect(() => {
@@ -250,7 +202,7 @@ export default function AperturaTurno({
     <Card>
       <CardHeader className="text-center">
         <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-          <IconoTienda />
+          <Store size={32} strokeWidth={1.5} />
         </div>
         <CardTitle className="text-lg">Punto de Venta Asignado</CardTitle>
         <CardDescription>
@@ -300,7 +252,7 @@ export default function AperturaTurno({
           /* PDV no activo */
           <div className="space-y-4 text-center">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10 text-destructive">
-              <IconoAlerta />
+              <AlertTriangle size={16} />
             </div>
             <div>
               <p className="font-semibold text-destructive">
@@ -323,7 +275,7 @@ export default function AperturaTurno({
             onClick={avanzarPaso}
           >
             Continuar
-            <IconoFlecha />
+            <ArrowRight size={18} />
           </Button>
         ) : (
           <Button
@@ -334,7 +286,7 @@ export default function AperturaTurno({
               alert("Contactar supervisor — funcionalidad próximamente")
             }
           >
-            <IconoContacto />
+            <Phone size={20} />
             Contactar Supervisor
           </Button>
         )}
@@ -357,7 +309,7 @@ export default function AperturaTurno({
     <Card>
       <CardHeader className="text-center">
         <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-          <IconoDinero />
+          <Banknote size={32} strokeWidth={1.5} />
         </div>
         <CardTitle className="text-lg">Apertura de Caja</CardTitle>
         <CardDescription>
@@ -434,7 +386,7 @@ export default function AperturaTurno({
           disabled={saldoInicial <= 0}
         >
           Confirmar Saldo
-          <IconoFlecha />
+          <ArrowRight size={18} />
         </Button>
       </CardFooter>
     </Card>
@@ -451,7 +403,7 @@ export default function AperturaTurno({
       {/* Header compacto */}
       <div className="shrink-0 space-y-2 px-4 pb-2 pt-1 text-center">
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-          <IconoInventario />
+          <Package size={32} strokeWidth={1.5} />
         </div>
         <div>
           <h2 className="text-base font-semibold text-foreground">Inventario Inicial</h2>
@@ -463,13 +415,13 @@ export default function AperturaTurno({
         {/* Botón "marcar todo revisado" */}
         {!todosVerificados && (
           <Button variant="outline" size="sm" className="w-full gap-2" onClick={marcarTodoRevisado}>
-            <IconoCheck />
+            <Check size={16} strokeWidth={2.5} />
             Marcar todo como revisado
           </Button>
         )}
         {todosVerificados && (
           <div className="flex items-center justify-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400">
-            <IconoCheck />
+            <Check size={16} strokeWidth={2.5} />
             <span className="text-sm font-medium">Inventario confirmado</span>
           </div>
         )}
@@ -599,6 +551,18 @@ export default function AperturaTurno({
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-background to-muted/30 p-4">
+      {/* Botón volver al panel (solo admin/supervisor) */}
+      {onVolverAdmin && (
+        <button
+          onClick={onVolverAdmin}
+          className="absolute top-4 left-4 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <svg className="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+          Volver al panel
+        </button>
+      )}
       <div className="w-full max-w-lg">
         {/* Logo */}
         <h1 className="mb-6 text-center text-2xl font-bold text-foreground">
