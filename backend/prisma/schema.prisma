@@ -1,0 +1,250 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Rol {
+  id       Int       @id @default(autoincrement())
+  nombre   String    @unique
+  usuarios Usuario[]
+}
+
+model Usuario {
+  id            Int         @id @default(autoincrement())
+  rol_id        Int
+  pdv_id        Int?
+  rut           String      @unique
+  nombre        String
+  password_hash String
+  activo        Boolean     @default(true)
+  pago_diario   Int         @default(28000)
+  rol           Rol         @relation(fields: [rol_id], references: [id])
+  pdv           PDV?        @relation(fields: [pdv_id], references: [id])
+  turnos              TurnoCaja[]
+  retiros_realizados  RetiroTurno[]
+  solicitudes         Solicitud[]
+  turnos_planeados    TurnoPlaneado[]
+  notificaciones      Notificacion[]
+}
+
+enum TipoPDV {
+  BODEGA
+  PUNTO_VENTA
+}
+
+model PDV {
+  id                  Int             @id @default(autoincrement())
+  nombre              String
+  tipo                TipoPDV
+  activo              Boolean         @default(true)
+  inventario          Inventario[]
+  turnos              TurnoCaja[]
+  usuarios            Usuario[]
+  movimientos_origen  MovimientoInv[] @relation("PDVOrigen")
+  movimientos_destino MovimientoInv[] @relation("PDVDestino")
+  registros_diarios   RegistroDiario[]
+  solicitudes         Solicitud[]
+  turnos_planeados    TurnoPlaneado[]
+}
+
+model Categoria {
+  id        Int        @id @default(autoincrement())
+  nombre    String     @unique
+  productos Producto[]
+}
+
+model Producto {
+  id           Int             @id @default(autoincrement())
+  categoria_id Int
+  nombre       String
+  precio_venta Int
+  costo        Int
+  activo       Boolean         @default(true)
+  categoria    Categoria       @relation(fields: [categoria_id], references: [id])
+  inventarios  Inventario[]
+  movimientos  MovimientoInv[]
+  solicitudes  SolicitudItem[]
+}
+
+model Inventario {
+  id            Int      @id @default(autoincrement())
+  pdv_id        Int
+  producto_id   Int
+  stock_actual  Int      @default(0)
+  stock_critico Int      @default(0)
+  pdv           PDV      @relation(fields: [pdv_id], references: [id])
+  producto      Producto @relation(fields: [producto_id], references: [id])
+
+  @@unique([pdv_id, producto_id])
+  // pdv_id ya indexado por MySQL como FK (@@unique también crea índice)
+}
+
+enum EstadoTurno {
+  ABIERTO
+  CERRADO
+}
+
+model TurnoCaja {
+  id                  Int           @id @default(autoincrement())
+  pdv_id              Int
+  usuario_id          Int?
+  fecha_apertura      DateTime      @default(now())
+  fecha_cierre        DateTime?
+  saldo_inicial       Int           @default(0)
+  efectivo_declarado  Int?
+  diferencia_caja     Int?          // almacenado al cierre (auditabilidad financiera)
+  venta_efectivo      Int?
+  venta_tarjeta       Int?
+  venta_transferencia Int?
+  total_calculado     Int?          // total declarado al cierre (stock flow)
+  estado              EstadoTurno   @default(ABIERTO)
+  pdv                 PDV           @relation(fields: [pdv_id], references: [id])
+  usuario             Usuario?      @relation(fields: [usuario_id], references: [id])
+  gastos              GastoTurno[]
+  depositos           Deposito[]
+  retiros             RetiroTurno[]
+
+  // FK (pdv_id, usuario_id) ya indexadas por MySQL automáticamente
+  @@index([fecha_apertura])
+  @@index([estado])
+}
+
+// GastoTurno — gastos registrados durante el turno (art. aseo, líquidos, etc.)
+model GastoTurno {
+  id          Int       @id @default(autoincrement())
+  turno_id    Int
+  descripcion String
+  monto       Int
+  turno       TurnoCaja @relation(fields: [turno_id], references: [id])
+  // turno_id ya indexado por MySQL como FK
+}
+
+// RetiroTurno — retiros de efectivo realizados durante el turno
+model RetiroTurno {
+  id          Int       @id @default(autoincrement())
+  turno_id    Int
+  usuario_id  Int?
+  monto       Int
+  descripcion String?
+  fecha_hora  DateTime  @default(now())
+  turno       TurnoCaja @relation(fields: [turno_id], references: [id])
+  usuario     Usuario?  @relation(fields: [usuario_id], references: [id])
+  // turno_id, usuario_id ya indexados por MySQL como FK
+}
+
+// Deposito — seguimiento de depósitos bancarios por turno
+model Deposito {
+  id            Int            @id @default(autoincrement())
+  turno_id      Int
+  monto_teorico Int
+  monto_real    Int
+  fecha         DateTime       @default(now())
+  estado        EstadoDeposito @default(PENDIENTE)
+  turno         TurnoCaja      @relation(fields: [turno_id], references: [id])
+
+  @@index([estado])
+}
+
+enum EstadoDeposito {
+  PENDIENTE
+  CONFIRMADO
+  TRANSFERENCIA
+}
+
+enum TipoMovimiento {
+  INGRESO
+  TRASPASO
+  VENTA
+  MERMA
+}
+
+enum EstadoSolicitud {
+  PENDIENTE
+  DESPACHADA
+  CONFIRMADA
+}
+
+model MovimientoInv {
+  id             Int            @id @default(autoincrement())
+  producto_id    Int
+  pdv_origen_id  Int?
+  pdv_destino_id Int?
+  tipo           TipoMovimiento
+  cantidad       Int
+  fecha          DateTime       @default(now())
+  producto       Producto       @relation(fields: [producto_id], references: [id])
+  pdv_origen     PDV?           @relation("PDVOrigen", fields: [pdv_origen_id], references: [id])
+  pdv_destino    PDV?           @relation("PDVDestino", fields: [pdv_destino_id], references: [id])
+
+  // producto_id ya indexado por MySQL como FK
+  @@index([fecha])
+  @@index([tipo])
+}
+
+model RegistroDiario {
+  id        Int      @id @default(autoincrement())
+  pdv_id    Int
+  fecha     DateTime @db.Date
+  datos     Json
+  creado_en DateTime @default(now())
+  pdv       PDV      @relation(fields: [pdv_id], references: [id])
+
+  @@unique([pdv_id, fecha])
+}
+
+model Solicitud {
+  id           Int             @id @default(autoincrement())
+  pdv_id       Int
+  usuario_id   Int?
+  estado       EstadoSolicitud @default(PENDIENTE)
+  notas        String?
+  fecha        DateTime        @default(now())
+  fecha_cierre DateTime?
+  pdv          PDV             @relation(fields: [pdv_id], references: [id])
+  usuario      Usuario?        @relation(fields: [usuario_id], references: [id])
+  items        SolicitudItem[]
+
+  // pdv_id ya indexado por MySQL como FK
+  @@index([estado])
+  @@index([fecha])
+}
+
+model SolicitudItem {
+  id           Int       @id @default(autoincrement())
+  solicitud_id Int
+  producto_id  Int
+  cantidad     Int
+  solicitud    Solicitud @relation(fields: [solicitud_id], references: [id])
+  producto     Producto  @relation(fields: [producto_id], references: [id])
+}
+
+model Notificacion {
+  id         Int      @id @default(autoincrement())
+  usuario_id Int
+  titulo     String
+  mensaje    String   @db.Text
+  leida      Boolean  @default(false)
+  fecha      DateTime @default(now())
+  usuario    Usuario  @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
+
+  // usuario_id ya indexado como FK por MySQL
+  @@index([leida])
+  @@index([fecha])
+}
+
+model TurnoPlaneado {
+  id         Int      @id @default(autoincrement())
+  fecha      DateTime @db.Date
+  pdv_id     Int
+  usuario_id Int
+  pdv        PDV      @relation(fields: [pdv_id], references: [id])
+  usuario    Usuario  @relation(fields: [usuario_id], references: [id])
+
+  @@unique([fecha, pdv_id])
+  // usuario_id ya indexado por MySQL como FK; fecha cubierta por el @@unique
+  @@index([fecha])
+}
