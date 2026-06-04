@@ -242,7 +242,7 @@ export default function BarraLateral({ sesion, horaApertura, onCerrarSesion, onV
   );
 
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-dvh bg-background">
       {/* Sidebar desktop */}
       <aside
         className={`hidden lg:flex flex-col border-r bg-card transition-all duration-200 ${

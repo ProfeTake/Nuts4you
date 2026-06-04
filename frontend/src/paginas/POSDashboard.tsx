@@ -159,8 +159,12 @@ export default function POSDashboard() {
 
   const totalGastosLibres = movimientos.filter(m => m.tipo === "gasto").reduce((s, m) => s + m.monto, 0);
   const totalRetiros      = movimientos.filter(m => m.tipo === "retiro").reduce((s, m) => s + m.monto, 0);
+  const totalIngresos     = movimientos.filter(m => m.tipo === "ingreso").reduce((s, m) => s + m.monto, 0);
   const totalGastos       = tarjetaNum + transferenciaNum + totalGastosLibres;
-  const esperadoCaja      = estTotal - totalGastos - totalRetiros;
+  // ventaEfectivoPura = solo la porción de ventas cobrada en efectivo (para contabilidad)
+  const ventaEfectivoPura = Math.max(0, estTotal - totalGastos - totalRetiros);
+  // esperadoCaja = todo el efectivo físico que debería haber en caja (ventas + saldo apertura + otros ingresos)
+  const esperadoCaja      = ventaEfectivoPura + totalIngresos;
   const diferencia        = efectivoNum > 0 ? efectivoNum - esperadoCaja : null;
   const aDepositar        = efectivoNum > 0 ? efectivoNum + totalRetiros : null;
   const hayFaltante       = diferencia !== null && diferencia < 0;
@@ -186,7 +190,7 @@ export default function POSDashboard() {
   const ejecutarCierre = () => {
     const payload: CierrePayload = {
       efectivoContado:    efectivoNum,
-      ventaEfectivo:      Math.max(0, esperadoCaja),
+      ventaEfectivo:      ventaEfectivoPura,
       ventaTarjeta:       tarjetaNum,
       ventaTransferencia: transferenciaNum,
       totalCalculado:     estTotal,
@@ -522,6 +526,7 @@ export default function POSDashboard() {
                 {transferenciaNum > 0  && <FilaCuadre label="− Transferencia"  valor={`-${formatearCLP(transferenciaNum)}`} claseValor="text-violet-600" />}
                 {totalGastosLibres > 0 && <FilaCuadre label="− Gastos"         valor={`-${formatearCLP(totalGastosLibres)}`} claseValor="text-red-600" />}
                 {totalRetiros > 0      && <FilaCuadre label="− Retiros"        valor={`-${formatearCLP(totalRetiros)}`}      claseValor="text-orange-600" />}
+                {totalIngresos > 0     && <FilaCuadre label="+ Ingresos / Apertura" valor={`+${formatearCLP(totalIngresos)}`} claseValor="text-emerald-600" />}
                 <div className="flex items-center justify-between px-4 py-3 bg-muted/40">
                   <span className="text-sm font-bold">Esperado en caja</span>
                   <span className={`font-extrabold tabular-nums ${esperadoCaja >= 0 ? "text-foreground" : "text-destructive"}`}>{formatearCLP(esperadoCaja)}</span>

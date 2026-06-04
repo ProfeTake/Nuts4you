@@ -1,8 +1,8 @@
 import { Router } from 'express'
 import { autenticar } from '../middlewares/autenticar'
 import { autorizar } from '../middlewares/autorizar'
-import { despachoSchema, ajustarStockSchema, crearInventarioSchema } from '../validaciones/bodega.schema'
-import { getStockBodega, registrarDespacho, getDespachos, ajustarStock, crearInventarioBodega, eliminarInventarioBodega, getProductosDisponibles } from '../servicios/bodega.servicio'
+import { despachoSchema, ajustarStockSchema, crearInventarioSchema, crearProductoSchema } from '../validaciones/bodega.schema'
+import { getStockBodega, registrarDespacho, getDespachos, ajustarStock, crearInventarioBodega, eliminarInventarioBodega, getProductosDisponibles, getCategorias, crearProducto, buscarPorCodigoBarra } from '../servicios/bodega.servicio'
 
 const router = Router()
 
@@ -130,6 +130,53 @@ router.post('/despachos',
         res.status(400).json({ error: error.message })
         return
       }
+      next(error)
+    }
+  }
+)
+
+/** GET /api/bodega/categorias — Lista todas las categorías */
+router.get('/categorias',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR', 'BODEGUERO'),
+  async (_req, res, next) => {
+    try {
+      const data = await getCategorias()
+      res.json({ data })
+    } catch (error) { next(error) }
+  }
+)
+
+/** GET /api/bodega/buscar-codigo?codigo= — Buscar producto por código de barras */
+router.get('/buscar-codigo',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR', 'BODEGUERO'),
+  async (req, res, next) => {
+    const codigo = String(req.query.codigo ?? '').trim()
+    if (!codigo) { res.status(400).json({ error: 'Falta parámetro codigo' }); return }
+    try {
+      const producto = await buscarPorCodigoBarra(codigo)
+      if (!producto) { res.status(404).json({ error: 'Producto no encontrado' }); return }
+      res.json({ data: { id: producto.id, nombre: producto.nombre, categoria: producto.categoria.nombre, codigoBarra: producto.codigo_barra } })
+    } catch (error) { next(error) }
+  }
+)
+
+/** POST /api/bodega/productos — Crear producto nuevo y agregarlo al inventario de bodega */
+router.post('/productos',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR'),
+  async (req, res, next) => {
+    const parsed = crearProductoSchema.safeParse(req.body)
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Datos inválidos', detalle: parsed.error.flatten() })
+      return
+    }
+    try {
+      const data = await crearProducto(parsed.data)
+      res.status(201).json({ data })
+    } catch (error) {
+      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }

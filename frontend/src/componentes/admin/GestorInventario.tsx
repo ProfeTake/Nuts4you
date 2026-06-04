@@ -17,7 +17,7 @@ import {
   Save,
   QrCode,
   Plus,
-  ChevronDown,
+  Wand2,
 } from "lucide-react";
 import { ModalEscáner } from "@/componentes/bodega/EscánerCodigos";
 import { CatálogoCodigos } from "@/componentes/bodega/CatálogoCodigos";
@@ -42,6 +42,7 @@ import type {
 
 // API
 import { apiGet, apiPatch, apiPost, apiDelete } from "@/lib/api";
+import { useAuthStore } from "@/store/auth.store";
 import { toast } from "sonner";
 
 // ─── Tipos de API ───
@@ -56,19 +57,36 @@ interface ItemBodegaAPI {
   stockCritico: number;
 }
 
-interface ProductoDisponible {
-  id:        number;
-  nombre:    string;
-  categoria: string;
+interface CategoriaAPI {
+  id:     number;
+  nombre: string;
 }
 
 interface FormCrear {
-  productoId:   number;
-  stockActual:  number;
-  stockCritico: number;
+  nombre:          string;
+  categoriaId:     number;
+  categoriaNombre: string;
+  codigoBarra:     string;
+  precioVenta:     number;
+  costo:           number;
+  stockActual:     number;
+  stockCritico:    number;
 }
 
-const FORM_CREAR_VACIO: FormCrear = { productoId: 0, stockActual: 0, stockCritico: 0 };
+const FORM_CREAR_VACIO: FormCrear = {
+  nombre: "", categoriaId: 0, categoriaNombre: "",
+  codigoBarra: "", precioVenta: 0, costo: 0,
+  stockActual: 0, stockCritico: 0,
+};
+
+/** Genera un EAN-13 de uso interno (prefijo "2" reservado para tiendas) */
+function generarCodigoInterno(): string {
+  const digits: number[] = [2];
+  for (let i = 0; i < 11; i++) digits.push(Math.floor(Math.random() * 10));
+  const sum = digits.reduce((acc, d, i) => acc + d * (i % 2 === 0 ? 1 : 3), 0);
+  digits.push((10 - (sum % 10)) % 10);
+  return digits.join("");
+}
 
 function categoriaAPI(cat: string): CategoriaBodega {
   if (cat === "Líquidos") return "liquidos";
@@ -141,166 +159,7 @@ function badgeEntrega(estado: EntregaSucursal["estado"]) {
 
 // ─── Mock data inicial ───
 
-const ITEMS_INICIALES: ItemBodega[] = [
-  // Mezclas / Conos
-  {
-    id: "m1",
-    item: "Mezcla Maní",
-    categoria: "mezclas",
-    saldoInicial: 120,
-    ingresos: 40,
-    utilizadas: 95,
-    saldoActual: 65,
-    stockMinimo: 30,
-    stockMaximo: 200,
-    estado: "STOCK OK",
-  },
-  {
-    id: "m2",
-    item: "Mezcla Almendra",
-    categoria: "mezclas",
-    saldoInicial: 80,
-    ingresos: 20,
-    utilizadas: 98,
-    saldoActual: 2,
-    stockMinimo: 15,
-    stockMaximo: 150,
-    estado: "SIN STOCK",
-  },
-  {
-    id: "m3",
-    item: "Mezcla Nuez",
-    categoria: "mezclas",
-    saldoInicial: 60,
-    ingresos: 30,
-    utilizadas: 50,
-    saldoActual: 40,
-    stockMinimo: 20,
-    stockMaximo: 120,
-    estado: "STOCK OK",
-  },
-  {
-    id: "m4",
-    item: "Mezcla Promo",
-    categoria: "mezclas",
-    saldoInicial: 100,
-    ingresos: 50,
-    utilizadas: 60,
-    saldoActual: 90,
-    stockMinimo: 25,
-    stockMaximo: 180,
-    estado: "STOCK OK",
-  },
-  {
-    id: "m5",
-    item: "Conos / Barquillos",
-    categoria: "mezclas",
-    saldoInicial: 200,
-    ingresos: 0,
-    utilizadas: 180,
-    saldoActual: 20,
-    stockMinimo: 50,
-    stockMaximo: 400,
-    estado: "POCO STOCK",
-  },
-  // Líquidos
-  {
-    id: "l1",
-    item: "Aguas 600ml",
-    categoria: "liquidos",
-    saldoInicial: 96,
-    ingresos: 48,
-    utilizadas: 72,
-    saldoActual: 72,
-    stockMinimo: 24,
-    stockMaximo: 200,
-    estado: "STOCK OK",
-  },
-  {
-    id: "l2",
-    item: "Bebidas 350ml",
-    categoria: "liquidos",
-    saldoInicial: 60,
-    ingresos: 24,
-    utilizadas: 55,
-    saldoActual: 29,
-    stockMinimo: 20,
-    stockMaximo: 120,
-    estado: "STOCK OK",
-  },
-  {
-    id: "l3",
-    item: "Energéticas",
-    categoria: "liquidos",
-    saldoInicial: 30,
-    ingresos: 0,
-    utilizadas: 30,
-    saldoActual: 0,
-    stockMinimo: 10,
-    stockMaximo: 60,
-    estado: "SIN STOCK",
-  },
-  {
-    id: "l4",
-    item: "Jugos 300ml",
-    categoria: "liquidos",
-    saldoInicial: 48,
-    ingresos: 24,
-    utilizadas: 20,
-    saldoActual: 52,
-    stockMinimo: 12,
-    stockMaximo: 80,
-    estado: "STOCK OK",
-  },
-];
 
-const ENTREGAS_INICIALES: EntregaSucursal[] = [
-  {
-    id: "e1",
-    sucursal: "Mall",
-    item: "Mezcla Maní",
-    cantidadSolicitada: 30,
-    cantidadEntregada: 30,
-    fecha: "2026-03-17",
-    estado: "Entregado",
-  },
-  {
-    id: "e2",
-    sucursal: "Paseo",
-    item: "Mezcla Almendra",
-    cantidadSolicitada: 25,
-    cantidadEntregada: 10,
-    fecha: "2026-03-17",
-    estado: "Parcial",
-  },
-  {
-    id: "e3",
-    sucursal: "Open Plaza",
-    item: "Aguas 600ml",
-    cantidadSolicitada: 48,
-    cantidadEntregada: 0,
-    fecha: "2026-03-17",
-    estado: "Pendiente",
-  },
-  {
-    id: "e4",
-    sucursal: "Rengo",
-    item: "Conos / Barquillos",
-    cantidadSolicitada: 40,
-    cantidadEntregada: 0,
-    fecha: "2026-03-17",
-    estado: "Pendiente",
-  },
-  {
-    id: "e5",
-    sucursal: "Baquedano",
-    item: "Energéticas",
-    cantidadSolicitada: 12,
-    cantidadEntregada: 0,
-    fecha: "2026-03-16",
-    estado: "Pendiente",
-  },
-];
 
 const SUCURSAL_LABELS: Record<Sucursal, string> = {
   Mall: "Mall Patio",
@@ -313,11 +172,13 @@ const SUCURSAL_LABELS: Record<Sucursal, string> = {
 // ─── Form de edición de stock ───
 
 interface FormItem {
+  nombre:       string;
   stockActual:  number;
   stockCritico: number;
 }
 
 const FORM_VACIO: FormItem = {
+  nombre:       "",
   stockActual:  0,
   stockCritico: 0,
 };
@@ -326,6 +187,8 @@ const FORM_VACIO: FormItem = {
 
 export function GestorInventario() {
   const queryClient = useQueryClient();
+  const rolUsuario = useAuthStore((s) => s.usuario?.rol);
+  const puedeVerCosto = rolUsuario !== "VENDEDOR";
 
   const { data: stockApi, isLoading: cargando } = useQuery({
     queryKey: ["bodega", "stock"],
@@ -335,17 +198,18 @@ export function GestorInventario() {
         .catch(() => [] as ItemBodega[]),
   });
 
-  const { data: productosDisponibles = [] } = useQuery({
-    queryKey: ["bodega", "productos-disponibles"],
+  const { data: categorias = [] } = useQuery({
+    queryKey: ["bodega", "categorias"],
     queryFn: () =>
-      apiGet<{ data: ProductoDisponible[] }>("/bodega/productos-disponibles")
+      apiGet<{ data: CategoriaAPI[] }>("/bodega/categorias")
         .then((r) => r.data)
-        .catch(() => [] as ProductoDisponible[]),
+        .catch(() => [] as CategoriaAPI[]),
   });
 
   const mutacionAjuste = useMutation({
     mutationFn: ({ inventarioId, data }: { inventarioId: number; data: FormItem }) =>
       apiPatch(`/bodega/stock/${inventarioId}`, {
+        nombre:       data.nombre.trim() || undefined,
         stockActual:  data.stockActual,
         stockCritico: data.stockCritico,
       }),
@@ -362,17 +226,27 @@ export function GestorInventario() {
   });
 
   const mutacionCrear = useMutation({
-    mutationFn: (data: FormCrear) =>
-      apiPost<{ data: ItemBodegaAPI }>("/bodega/stock", data),
+    mutationFn: (data: FormCrear) => {
+      const payload: Record<string, unknown> = {
+        nombre:       data.nombre,
+        precioVenta:  data.precioVenta,
+        costo:        data.costo,
+        stockActual:  data.stockActual,
+        stockCritico: data.stockCritico,
+      };
+      if (data.categoriaId) payload.categoriaId = data.categoriaId;
+      else payload.categoriaNombre = data.categoriaNombre;
+      if (data.codigoBarra.trim()) payload.codigoBarra = data.codigoBarra.trim();
+      return apiPost<{ data: ItemBodegaAPI }>("/bodega/productos", payload);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bodega", "stock"] });
-      queryClient.invalidateQueries({ queryKey: ["bodega", "productos-disponibles"] });
-      toast.success("Producto agregado al inventario");
+      toast.success("Producto creado y agregado al inventario");
       setCrearAbierto(false);
       setFormCrear(FORM_CREAR_VACIO);
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Error al agregar producto");
+      toast.error(err instanceof Error ? err.message : "Error al crear producto");
     },
   });
 
@@ -392,7 +266,7 @@ export function GestorInventario() {
 
   // Estado local
   const [items, setItems] = useState<ItemBodega[]>([]);
-  const [entregas, setEntregas] = useState<EntregaSucursal[]>(ENTREGAS_INICIALES);
+  const [entregas, setEntregas] = useState<EntregaSucursal[]>([]);
 
   useEffect(() => {
     if (stockApi) setItems(stockApi);
@@ -408,6 +282,18 @@ export function GestorInventario() {
   // Dialog crear
   const [crearAbierto, setCrearAbierto] = useState(false);
   const [formCrear, setFormCrear] = useState<FormCrear>(FORM_CREAR_VACIO);
+  const [nuevaCategoriaMode, setNuevaCategoriaMode] = useState(false);
+
+  const abrirCrearConCodigo = useCallback(async (codigo: string) => {
+    try {
+      await apiGet(`/bodega/buscar-codigo?codigo=${encodeURIComponent(codigo)}`);
+      toast.info("Ese código ya está registrado en el sistema");
+    } catch {
+      setFormCrear({ ...FORM_CREAR_VACIO, codigoBarra: codigo });
+      setNuevaCategoriaMode(false);
+      setCrearAbierto(true);
+    }
+  }, []);
 
   // Dialog eliminar
   const [eliminandoId, setEliminandoId] = useState<string | null>(null);
@@ -443,6 +329,7 @@ export function GestorInventario() {
     (item: ItemBodega) => {
       setEditandoId(item.id);
       setForm({
+        nombre:       item.item,
         stockActual:  item.saldoActual,
         stockCritico: item.stockMinimo,
       });
@@ -503,8 +390,7 @@ export function GestorInventario() {
           </p>
         </div>
         <Button
-          onClick={() => { setFormCrear(FORM_CREAR_VACIO); setCrearAbierto(true); }}
-          disabled={productosDisponibles.length === 0}
+          onClick={() => { setFormCrear(FORM_CREAR_VACIO); setNuevaCategoriaMode(false); setCrearAbierto(true); }}
           size="sm"
           className="gap-1.5"
         >
@@ -605,7 +491,7 @@ export function GestorInventario() {
       </Tabs>
 
       {/* FAB flotante para escáner */}
-      <ModalEscáner />
+      <ModalEscáner onCodigoDetectado={abrirCrearConCodigo} />
 
       {/* ── Entregas a Sucursales ── */}
       <Card>
@@ -730,15 +616,16 @@ export function GestorInventario() {
 
               {/* Cuerpo del formulario */}
               <div className="px-4 py-4 grid gap-4">
-                {/* Nombre del ítem (solo lectura) */}
-                {editandoId && (
-                  <div className="rounded-lg bg-muted/50 px-4 py-2.5">
-                    <p className="text-xs text-muted-foreground">Ítem</p>
-                    <p className="font-semibold">
-                      {items.find((i) => i.id === editandoId)?.item ?? "—"}
-                    </p>
-                  </div>
-                )}
+                {/* Nombre del ítem (editable) */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="form-nombre-item">Nombre del ítem</Label>
+                  <Input
+                    id="form-nombre-item"
+                    value={form.nombre}
+                    onChange={(e) => setField("nombre", e.target.value)}
+                    placeholder="Nombre del producto"
+                  />
+                </div>
 
                 {/* Stock Actual */}
                 <div className="space-y-1.5">
@@ -865,86 +752,180 @@ export function GestorInventario() {
         </div>
       )}
 
-      {/* ── Bottom-sheet: Agregar producto al inventario ── */}
+      {/* ── Bottom-sheet: Crear producto nuevo ── */}
       {crearAbierto && (
         <div className="fixed inset-0 z-50">
           <div
             className="absolute inset-0 bg-black/50"
-            onClick={() => { setCrearAbierto(false); setFormCrear(FORM_CREAR_VACIO); }}
+            onClick={() => { setCrearAbierto(false); setFormCrear(FORM_CREAR_VACIO); setNuevaCategoriaMode(false); }}
           />
           <div className="absolute bottom-0 left-0 right-0 max-h-[92dvh] animate-in slide-in-from-bottom duration-300">
             <div className="rounded-t-2xl bg-background overflow-y-auto max-h-[92dvh]">
+              {/* Header */}
               <div className="sticky top-0 bg-background px-4 pt-4 pb-3 border-b">
                 <div className="mb-3 flex justify-center">
                   <div className="h-1.5 w-12 rounded-full bg-muted-foreground/30" />
                 </div>
-                <h2 className="text-lg font-bold">Agregar producto al inventario</h2>
+                <h2 className="text-lg font-bold">Nuevo producto</h2>
                 <p className="text-sm text-muted-foreground">
-                  Selecciona un producto del catálogo para agregarlo a la Bodega Central.
+                  {formCrear.codigoBarra
+                    ? `Código escaneado: ${formCrear.codigoBarra}`
+                    : "Completa los datos del producto a agregar a la Bodega Central."}
                 </p>
               </div>
 
-              <div className="px-4 py-4 grid gap-4">
-                {/* Selector de producto */}
-                <div className="space-y-1.5">
-                  <Label>Producto</Label>
-                  <div className="relative">
-                    <select
-                      value={formCrear.productoId}
-                      onChange={(e) => setFormCrear((p) => ({ ...p, productoId: Number(e.target.value) }))}
-                      className="w-full h-11 rounded-xl border border-input bg-background px-3 pr-9 text-sm outline-none focus:ring-2 focus:ring-ring appearance-none"
+              <div className="px-4 py-4 grid gap-5">
+                {/* Categoría — chips */}
+                <div className="space-y-2">
+                  <Label>Categoría</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {categorias.map((cat) => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => { setFormCrear((p) => ({ ...p, categoriaId: cat.id, categoriaNombre: "" })); setNuevaCategoriaMode(false); }}
+                        className={`h-9 px-3 rounded-xl border text-sm font-semibold transition-colors ${
+                          formCrear.categoriaId === cat.id && !nuevaCategoriaMode
+                            ? "bg-primary/10 border-primary text-primary"
+                            : "border-border text-muted-foreground hover:border-primary/40"
+                        }`}
+                      >
+                        {cat.nombre}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => { setNuevaCategoriaMode(true); setFormCrear((p) => ({ ...p, categoriaId: 0 })); }}
+                      className={`h-9 px-3 rounded-xl border text-sm font-semibold transition-colors ${
+                        nuevaCategoriaMode
+                          ? "bg-primary/10 border-primary text-primary"
+                          : "border-dashed border-border text-muted-foreground hover:border-primary/40"
+                      }`}
                     >
-                      <option value={0} disabled>Seleccionar producto…</option>
-                      {productosDisponibles.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.nombre} — {p.categoria}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                      + Nueva categoría
+                    </button>
                   </div>
-                  {productosDisponibles.length === 0 && (
+                  {nuevaCategoriaMode && (
+                    <Input
+                      placeholder="Nombre de la nueva categoría…"
+                      value={formCrear.categoriaNombre}
+                      onChange={(e) => setFormCrear((p) => ({ ...p, categoriaNombre: e.target.value }))}
+                      autoFocus
+                    />
+                  )}
+                </div>
+
+                {/* Nombre del producto */}
+                <div className="space-y-1.5">
+                  <Label>Nombre del producto</Label>
+                  <Input
+                    placeholder="Ej: Agua Mineral Con Gas, Mezcla Nueces…"
+                    value={formCrear.nombre}
+                    onChange={(e) => setFormCrear((p) => ({ ...p, nombre: e.target.value }))}
+                  />
+                </div>
+
+                {/* Código de barras */}
+                <div className="space-y-1.5">
+                  <Label>
+                    Código de barras{" "}
+                    <span className="text-muted-foreground font-normal">(opcional)</span>
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="EAN-13, Code-128…"
+                      value={formCrear.codigoBarra}
+                      onChange={(e) => setFormCrear((p) => ({ ...p, codigoBarra: e.target.value }))}
+                      className="flex-1"
+                    />
+                    {!formCrear.codigoBarra && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 gap-1.5"
+                        title="Generar código interno EAN-13"
+                        onClick={() =>
+                          setFormCrear((p) => ({ ...p, codigoBarra: generarCodigoInterno() }))
+                        }
+                      >
+                        <Wand2 className="size-3.5" />
+                        Generar
+                      </Button>
+                    )}
+                  </div>
+                  {formCrear.codigoBarra && (
                     <p className="text-xs text-muted-foreground">
-                      Todos los productos del catálogo ya están en el inventario.
+                      Código:{" "}
+                      <span className="font-mono font-medium text-foreground">
+                        {formCrear.codigoBarra}
+                      </span>
                     </p>
                   )}
                 </div>
 
-                {/* Stock inicial */}
-                <div className="space-y-1.5">
-                  <Label>Stock inicial</Label>
-                  <Input
-                    type="number" min={0}
-                    value={formCrear.stockActual}
-                    onChange={(e) => setFormCrear((p) => ({ ...p, stockActual: Number(e.target.value) }))}
-                    onFocus={(e) => e.target.select()}
-                  />
-                  <p className="text-xs text-muted-foreground">Unidades físicas actuales en bodega</p>
+                {/* Precios */}
+                <div className={`grid gap-3 ${puedeVerCosto ? "grid-cols-2" : "grid-cols-1"}`}>
+                  <div className="space-y-1.5">
+                    <Label>Precio venta (CLP)</Label>
+                    <Input
+                      type="number" min={0}
+                      value={formCrear.precioVenta}
+                      onChange={(e) => setFormCrear((p) => ({ ...p, precioVenta: Number(e.target.value) }))}
+                      onFocus={(e) => e.target.select()}
+                    />
+                  </div>
+                  {puedeVerCosto && (
+                    <div className="space-y-1.5">
+                      <Label>Costo (CLP)</Label>
+                      <Input
+                        type="number" min={0}
+                        value={formCrear.costo}
+                        onChange={(e) => setFormCrear((p) => ({ ...p, costo: Number(e.target.value) }))}
+                        onFocus={(e) => e.target.select()}
+                      />
+                    </div>
+                  )}
                 </div>
 
-                {/* Stock mínimo */}
-                <div className="space-y-1.5">
-                  <Label>Stock mínimo (alerta)</Label>
-                  <Input
-                    type="number" min={0}
-                    value={formCrear.stockCritico}
-                    onChange={(e) => setFormCrear((p) => ({ ...p, stockCritico: Number(e.target.value) }))}
-                    onFocus={(e) => e.target.select()}
-                  />
-                  <p className="text-xs text-muted-foreground">Nivel que dispara la alerta "POCO STOCK"</p>
+                {/* Stock */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>Stock inicial</Label>
+                    <Input
+                      type="number" min={0}
+                      value={formCrear.stockActual}
+                      onChange={(e) => setFormCrear((p) => ({ ...p, stockActual: Number(e.target.value) }))}
+                      onFocus={(e) => e.target.select()}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Stock mínimo</Label>
+                    <Input
+                      type="number" min={0}
+                      value={formCrear.stockCritico}
+                      onChange={(e) => setFormCrear((p) => ({ ...p, stockCritico: Number(e.target.value) }))}
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <p className="text-xs text-muted-foreground">Nivel de alerta "POCO STOCK"</p>
+                  </div>
                 </div>
               </div>
 
               <div className="sticky bottom-0 bg-background border-t px-4 py-3 flex gap-2">
                 <Button
                   variant="outline" className="flex-1"
-                  onClick={() => { setCrearAbierto(false); setFormCrear(FORM_CREAR_VACIO); }}
+                  onClick={() => { setCrearAbierto(false); setFormCrear(FORM_CREAR_VACIO); setNuevaCategoriaMode(false); }}
                 >
                   Cancelar
                 </Button>
                 <Button
                   className="flex-1"
-                  disabled={formCrear.productoId === 0 || mutacionCrear.isPending}
+                  disabled={
+                    !formCrear.nombre.trim() ||
+                    (!formCrear.categoriaId && !formCrear.categoriaNombre.trim()) ||
+                    mutacionCrear.isPending
+                  }
                   onClick={() => mutacionCrear.mutate(formCrear)}
                 >
                   {mutacionCrear.isPending ? (
@@ -952,7 +933,7 @@ export function GestorInventario() {
                   ) : (
                     <Plus className="size-4 mr-1" />
                   )}
-                  Agregar
+                  Crear y agregar
                 </Button>
               </div>
             </div>

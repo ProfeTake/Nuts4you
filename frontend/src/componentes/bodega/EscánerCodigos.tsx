@@ -32,10 +32,7 @@ interface FormGen {
 
 const FORMATOS_SCAN = [
   BarcodeFormat.EAN_13, BarcodeFormat.EAN_8,
-  BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.CODE_93,
-  BarcodeFormat.UPC_A,   BarcodeFormat.UPC_E,
-  BarcodeFormat.ITF,     BarcodeFormat.QR_CODE,
-  BarcodeFormat.DATA_MATRIX, BarcodeFormat.AZTEC,
+  BarcodeFormat.CODE_128, BarcodeFormat.UPC_A,
 ];
 
 const TIPOS: { valor: TipoProducto; icono: React.ReactNode; desc: string }[] = [
@@ -71,7 +68,11 @@ function genEAN13() {
 
 // ─── Modal completo ───────────────────────────────────────────────────────────
 
-export function ModalEscáner() {
+interface ModalEscánerProps {
+  onCodigoDetectado?: (codigo: string) => void;
+}
+
+export function ModalEscáner({ onCodigoDetectado }: ModalEscánerProps = {}) {
   const [abierto, setAbierto] = useState(false);
   const [tab,     setTab]     = useState<Tab>("escanear");
 
@@ -134,7 +135,7 @@ export function ModalEscáner() {
 
             {/* Contenido scrollable */}
             <div className="flex-1 overflow-y-auto px-5 pb-8 pt-3">
-              {tab === "escanear" && <PanelEscanear />}
+              {tab === "escanear" && <PanelEscanear onCodigoDetectado={onCodigoDetectado} onCerrarModal={cerrar} />}
               {tab === "generar"  && <PanelGenerar />}
             </div>
           </div>
@@ -146,7 +147,7 @@ export function ModalEscáner() {
 
 // ─── Panel Escanear ───────────────────────────────────────────────────────────
 
-function PanelEscanear() {
+function PanelEscanear({ onCodigoDetectado, onCerrarModal }: { onCodigoDetectado?: (codigo: string) => void; onCerrarModal?: () => void }) {
   const videoRef   = useRef<HTMLVideoElement>(null);
   const readerRef  = useRef<BrowserMultiFormatReader | null>(null);
   const [activo,   setActivo]   = useState(false);
@@ -171,8 +172,7 @@ function PanelEscanear() {
 
     const hints = new Map();
     hints.set(DecodeHintType.POSSIBLE_FORMATS, FORMATOS_SCAN);
-    hints.set(DecodeHintType.TRY_HARDER, true);
-    readerRef.current = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 300 });
+    readerRef.current = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 400 });
 
     try {
       const dispositivos = await BrowserMultiFormatReader.listVideoInputDevices();
@@ -192,6 +192,14 @@ function PanelEscanear() {
           setUltimo(r);
           setHistorial(prev => [r, ...prev.filter(x => x.texto !== r.texto)].slice(0, 20));
           toast.success(r.texto, { description: fmtBadge(r.formato) });
+          // Detener escáner tras lectura exitosa para evitar lecturas accidentales
+          BrowserMultiFormatReader.releaseAllStreams();
+          readerRef.current = null;
+          setActivo(false);
+          if (onCodigoDetectado) {
+            onCerrarModal?.();
+            onCodigoDetectado(r.texto);
+          }
         }
         if (err && !(err instanceof NotFoundException)) console.warn(err);
       });

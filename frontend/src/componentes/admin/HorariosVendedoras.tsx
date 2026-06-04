@@ -11,7 +11,7 @@
 //   PATCH /api/rrhh/horarios/:id         → editar turno planeado
 //   DELETE /api/rrhh/horarios/:id        → eliminar turno planeado
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 import {
@@ -63,6 +63,7 @@ interface CeldaHorario {
   vendedorReal: { id: number; nombre: string } | null;
   total: number | null;
   estado: string | null;
+  publicado: boolean;
 }
 
 interface HorariosAPI {
@@ -73,7 +74,7 @@ interface HorariosAPI {
 }
 
 interface PersonalAPI {
-  data: { id: number; nombre: string; activo: boolean }[];
+  data: { id: number; nombre: string; activo: boolean; email: string | null }[];
 }
 
 // ─── Tipos del parser Excel ──────────────────────────────────────────────────
@@ -640,6 +641,18 @@ export function HorariosTurnos() {
       toast.error(err instanceof Error ? err.message : "Error al generar horario"),
   });
 
+  const mutDragFill = useMutation({
+    mutationFn: (items: { fecha: string; pdvId: number; usuarioId: number }[]) =>
+      apiPost<{ data: { procesados: number } }>("/rrhh/horarios/importar", { items }),
+    onSuccess: (res) => {
+      const n = res.data.procesados;
+      toast.success(`${n} turno${n !== 1 ? "s" : ""} asignado${n !== 1 ? "s" : ""}`);
+      queryClient.invalidateQueries({ queryKey: ["rrhh", "horarios"] });
+    },
+    onError: (err: unknown) =>
+      toast.error(err instanceof Error ? err.message : "Error al rellenar turnos"),
+  });
+
   const [publicarOpen, setPublicarOpen] = useState(false);
 
   const mutPublicar = useMutation({
@@ -779,7 +792,7 @@ export function HorariosTurnos() {
 
       {/* ── Barra de controles ── */}
       <div className="flex flex-wrap items-center gap-3">
-        {/* Selector de mes con flechas */}
+        {/* Selector de mes — grilla tipo calendario */}
         <div className="flex items-center gap-1 rounded-lg border bg-background shadow-sm">
           <Button
             variant="ghost"
@@ -790,17 +803,11 @@ export function HorariosTurnos() {
           >
             <ChevronLeft className="size-4" />
           </Button>
-          <select
-            value={mes}
-            onChange={(e) => setMes(e.target.value)}
-            className="h-9 min-w-[9rem] appearance-none bg-transparent px-2 text-sm font-medium text-center focus:outline-none cursor-pointer"
-          >
-            {opcionesMes.map((o) => (
-              <option key={o.valor} value={o.valor}>
-                {o.etiqueta}
-              </option>
-            ))}
-          </select>
+          <SelectorMesPicker
+            mes={mes}
+            opciones={opcionesMes}
+            onChange={setMes}
+          />
           <Button
             variant="ghost"
             size="icon"
@@ -865,34 +872,14 @@ export function HorariosTurnos() {
             Limpiar mes
           </Button>
         )}
+
       </div>
 
-      {/* ── Grilla de calendario ── */}
+      {/* ── Grilla de calendario — siempre visible ── */}
       {cargandoHorarios ? (
         <div className="flex items-center justify-center py-16 gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
           Cargando horarios…
-        </div>
-      ) : !hayDatos ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16 text-center gap-3">
-          <Calendar className="size-10 text-muted-foreground/30" />
-          <div>
-            <p className="text-sm font-medium text-muted-foreground">
-              No hay turnos planeados para este mes.
-            </p>
-            <p className="text-xs text-muted-foreground/70 mt-1">
-              Importa un Excel para comenzar.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="gap-1.5 mt-1"
-            onClick={() => setImportModalAbierto(true)}
-          >
-            <Upload className="size-4" />
-            Importar Excel
-          </Button>
         </div>
       ) : (
         <GrillaCalendario
@@ -901,19 +888,28 @@ export function HorariosTurnos() {
           grid={grid}
           onEditarCelda={abrirEdicion}
           onAgregarCelda={abrirCrear}
+          onBulkCrear={(items) => mutDragFill.mutate(items)}
         />
       )}
 
       {/* ── Leyenda ── */}
-      {hayDatos && (
+      {!cargandoHorarios && (
         <div className="flex flex-wrap gap-3 text-xs text-muted-foreground pt-1">
           <div className="flex items-center gap-1.5">
             <span className="inline-flex size-5 items-center justify-center rounded bg-blue-100 text-blue-700 font-bold text-[10px] dark:bg-blue-900/40 dark:text-blue-300">P</span>
             <span>Planeado</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="inline-flex size-5 items-center justify-center rounded bg-emerald-100 text-emerald-700 font-bold text-[10px] dark:bg-emerald-900/40 dark:text-emerald-300">C</span>
-            <span>Confirmado</span>
+            <span className="inline-flex items-center gap-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] px-1 py-0.5 dark:bg-emerald-900/40 dark:text-emerald-300">
+              <Send className="size-2.5" />P
+            </span>
+            <span>Publicado</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-flex items-center gap-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] px-1 py-0.5 dark:bg-emerald-900/40 dark:text-emerald-300">
+              <Check className="size-2.5" />C
+            </span>
+            <span>Confirmado (turno real)</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="inline-flex size-5 items-center justify-center rounded bg-orange-100 text-orange-700 font-bold text-[10px] dark:bg-orange-900/40 dark:text-orange-300">C</span>
@@ -1279,35 +1275,53 @@ export function HorariosTurnos() {
                 Vendedores con turnos asignados este mes
               </p>
               {(() => {
-                // Agrupar planeados por usuario desde el grid
-                const resumen = new Map<string, { pdvs: Set<string>; dias: number }>();
+                // Mapa id → email de personal
+                const emailPorId = new Map(personalData.map((p) => [p.id, p.email]));
+
+                // Agrupar planeados por vendedor (id → { nombre, dias, email })
+                const resumen = new Map<number, { nombre: string; dias: number; email: string | null }>();
                 Object.entries(grid).forEach(([, pdvMap]) => {
                   Object.values(pdvMap).forEach((celda) => {
                     if (!celda.vendedorPlaneado) return;
-                    const nombre = celda.vendedorPlaneado.nombre;
-                    if (!resumen.has(nombre)) resumen.set(nombre, { pdvs: new Set(), dias: 0 });
-                    const r = resumen.get(nombre)!;
-                    r.dias++;
-                    if (celda.vendedorPlaneado) r.pdvs.add(Object.keys(pdvMap)[0] ?? "");
+                    const { id, nombre } = celda.vendedorPlaneado;
+                    if (!resumen.has(id)) {
+                      resumen.set(id, { nombre, dias: 0, email: emailPorId.get(id) ?? null });
+                    }
+                    resumen.get(id)!.dias++;
                   });
                 });
                 const entries = [...resumen.entries()];
                 if (entries.length === 0) {
                   return <p className="text-sm text-muted-foreground">No hay turnos planeados para notificar.</p>;
                 }
-                return entries.map(([nombre, info]) => (
-                  <div key={nombre} className="flex items-center justify-between rounded-xl border px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
-                        {nombre.slice(0, 2).toUpperCase()}
+                const conCorreo = entries.filter(([, v]) => v.email).length;
+                return (
+                  <>
+                    {entries.map(([id, info]) => (
+                      <div key={id} className="flex items-center justify-between rounded-xl border px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
+                            {info.nombre.slice(0, 2).toUpperCase()}
+                          </div>
+                          <div>
+                            <span className="text-sm font-medium">{info.nombre}</span>
+                            {info.email
+                              ? <p className="text-[10px] text-sky-600 flex items-center gap-0.5"><Mail className="size-2.5" />{info.email}</p>
+                              : <p className="text-[10px] text-muted-foreground/60">Sin correo configurado</p>}
+                          </div>
+                        </div>
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {info.dias} día{info.dias !== 1 ? "s" : ""}
+                        </span>
                       </div>
-                      <span className="text-sm font-medium">{nombre}</span>
-                    </div>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {info.dias} día{info.dias !== 1 ? "s" : ""}
-                    </span>
-                  </div>
-                ));
+                    ))}
+                    {conCorreo < entries.length && (
+                      <p className="text-[11px] text-amber-600 pt-1">
+                        {entries.length - conCorreo} vendedor{entries.length - conCorreo !== 1 ? "es" : ""} sin correo — solo recibirán notificación en el sistema. Configura el correo en RRHH → Personal.
+                      </p>
+                    )}
+                  </>
+                );
               })()}
             </div>
 
@@ -1315,7 +1329,7 @@ export function HorariosTurnos() {
               <Mail className="size-4 text-sky-600 shrink-0 mt-0.5" />
               <div className="text-xs text-muted-foreground space-y-0.5">
                 <p className="font-semibold text-foreground">Correo electrónico</p>
-                <p>Si tienes SMTP configurado en el servidor, también se enviará un correo a cada vendedor/a. Si no, la notificación queda en el sistema.</p>
+                <p>Los vendedores con correo configurado recibirán un email con sus turnos. El resto recibirá solo la notificación interna del sistema.</p>
               </div>
             </div>
 
@@ -1549,12 +1563,74 @@ interface GrillaProps {
   grid: Record<string, Record<number, CeldaHorario>>;
   onEditarCelda: (celdaId: number, pdvNombre: string, fecha: string, vendedorActualId: number | null) => void;
   onAgregarCelda: (pdvId: number, pdvNombre: string, fecha: string) => void;
+  onBulkCrear: (items: { fecha: string; pdvId: number; usuarioId: number }[]) => void;
 }
 
-function GrillaCalendario({ dias, pdvs, grid, onEditarCelda, onAgregarCelda }: GrillaProps) {
+function GrillaCalendario({ dias, pdvs, grid, onEditarCelda, onAgregarCelda, onBulkCrear }: GrillaProps) {
+  const [dragInfo, setDragInfo] = useState<{
+    pdvId: number;
+    fechaInicio: string;
+    vendedorId: number;
+    fechaFin: string;
+  } | null>(null);
+
+  // Refs para que el mouseup global vea los valores actuales sin re-registrarse
+  const dragInfoRef = useRef(dragInfo);
+  const diasRef     = useRef(dias);
+  const gridRef     = useRef(grid);
+  const onBulkRef   = useRef(onBulkCrear);
+  useEffect(() => { dragInfoRef.current = dragInfo; },     [dragInfo]);
+  useEffect(() => { diasRef.current     = dias; },         [dias]);
+  useEffect(() => { gridRef.current     = grid; },         [grid]);
+  useEffect(() => { onBulkRef.current   = onBulkCrear; }, [onBulkCrear]);
+
+  // Registrar mouseup global una sola vez — finaliza el drag-fill
+  useEffect(() => {
+    const onMouseUp = () => {
+      const info = dragInfoRef.current;
+      if (!info) return;
+      const { pdvId, fechaInicio, vendedorId, fechaFin } = info;
+      const allDias     = diasRef.current;
+      const currentGrid = gridRef.current;
+      const i = allDias.indexOf(fechaInicio);
+      const j = allDias.indexOf(fechaFin);
+      if (i !== -1 && j !== -1 && i !== j) {
+        const [min, max] = i <= j ? [i, j] : [j, i];
+        const items = allDias.slice(min, max + 1)
+          .filter((fecha) => {
+            if (fecha === fechaInicio) return false;
+            const celda = (currentGrid[fecha] ?? {})[pdvId];
+            return !celda?.vendedorPlaneado;
+          })
+          .map((fecha) => ({ fecha, pdvId, usuarioId: vendedorId }));
+        if (items.length > 0) onBulkRef.current(items);
+      }
+      setDragInfo(null);
+    };
+    document.addEventListener("mouseup", onMouseUp);
+    return () => document.removeEventListener("mouseup", onMouseUp);
+  }, []);
+
+  const handleDragStart = useCallback((pdvId: number, fechaInicio: string, vendedorId: number) => {
+    setDragInfo({ pdvId, fechaInicio, vendedorId, fechaFin: fechaInicio });
+  }, []);
+
+  const handleCellEnter = useCallback((pdvId: number, fecha: string) => {
+    setDragInfo((cur) => cur && cur.pdvId === pdvId ? { ...cur, fechaFin: fecha } : cur);
+  }, []);
+
+  const dragRangoSet = useMemo((): Set<string> => {
+    if (!dragInfo) return new Set();
+    const i = dias.indexOf(dragInfo.fechaInicio);
+    const j = dias.indexOf(dragInfo.fechaFin);
+    if (i === -1 || j === -1) return new Set();
+    const [min, max] = i <= j ? [i, j] : [j, i];
+    return new Set(dias.slice(min, max + 1));
+  }, [dragInfo, dias]);
+
   return (
     <div className="overflow-x-auto rounded-xl border shadow-sm -mx-1 px-1">
-      <table className="text-xs min-w-[460px] w-full border-collapse">
+      <table className={`text-xs min-w-[460px] w-full border-collapse${dragInfo ? " select-none cursor-crosshair" : ""}`}>
         {/* Cabecera con nombres de PDV */}
         <thead>
           <tr className="bg-muted/60 border-b">
@@ -1604,9 +1680,15 @@ function GrillaCalendario({ dias, pdvs, grid, onEditarCelda, onAgregarCelda }: G
 
                 {/* Columnas de PDV */}
                 {pdvs.map((pdv) => {
-                  const celda = filaDatos[pdv.id];
+                  const celda    = filaDatos[pdv.id];
+                  const enRango  = dragInfo?.pdvId === pdv.id && dragRangoSet.has(fecha);
+                  const esFuente = fecha === dragInfo?.fechaInicio && dragInfo?.pdvId === pdv.id;
                   return (
-                    <td key={pdv.id} className="px-1.5 py-1.5 text-center align-middle">
+                    <td
+                      key={pdv.id}
+                      className="px-1.5 py-1.5 text-center align-middle"
+                      onMouseEnter={() => dragInfo && handleCellEnter(pdv.id, fecha)}
+                    >
                       <CeldaVista
                         celda={celda ?? null}
                         pdvNombre={pdv.nombre}
@@ -1614,6 +1696,9 @@ function GrillaCalendario({ dias, pdvs, grid, onEditarCelda, onAgregarCelda }: G
                         fecha={fecha}
                         onEditar={onEditarCelda}
                         onAgregar={onAgregarCelda}
+                        onDragStart={handleDragStart}
+                        dragHighlight={enRango && !esFuente && !celda?.vendedorPlaneado}
+                        isDragging={!!dragInfo}
                       />
                     </td>
                   );
@@ -1636,14 +1721,21 @@ interface CeldaVistaProps {
   fecha: string;
   onEditar: (celdaId: number, pdvNombre: string, fecha: string, vendedorActualId: number | null) => void;
   onAgregar: (pdvId: number, pdvNombre: string, fecha: string) => void;
+  onDragStart: (pdvId: number, fecha: string, vendedorId: number) => void;
+  dragHighlight: boolean;
+  isDragging: boolean;
 }
 
-function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar }: CeldaVistaProps) {
+function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar, onDragStart, dragHighlight, isDragging }: CeldaVistaProps) {
   if (!celda) {
     return (
       <button
-        onClick={() => onAgregar(pdvId, pdvNombre, fecha)}
-        className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground/30 hover:bg-primary/10 hover:text-primary transition-colors mx-auto"
+        onClick={() => !isDragging && onAgregar(pdvId, pdvNombre, fecha)}
+        className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors mx-auto ${
+          dragHighlight
+            ? "bg-blue-100 border-2 border-dashed border-blue-400 text-blue-500 dark:bg-blue-900/30 dark:border-blue-500"
+            : "text-muted-foreground/30 hover:bg-primary/10 hover:text-primary"
+        }`}
         title={`Asignar vendedor/a — ${pdvNombre}`}
       >
         <Plus size={14} />
@@ -1651,7 +1743,7 @@ function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar }: Cel
     );
   }
 
-  const { vendedorPlaneado, vendedorReal, id, total } = celda;
+  const { vendedorPlaneado, vendedorReal, id, total, publicado } = celda;
 
   // Caso: solo real (sin plan)
   if (!vendedorPlaneado && vendedorReal) {
@@ -1736,23 +1828,37 @@ function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar }: Cel
     );
   }
 
-  // Caso: solo planeado (sin real aún)
+  // Caso: solo planeado (sin real aún) — publicado o pendiente
   if (vendedorPlaneado && !vendedorReal) {
     return (
-      <button
-        title={`Planeado: ${vendedorPlaneado.nombre}`}
-        onClick={() =>
-          id !== null && onEditar(id, pdvNombre, fecha, vendedorPlaneado.id)
-        }
-        className="group"
-      >
-        <Badge
-          variant="outline"
-          className="text-[10px] px-1.5 py-0.5 h-auto bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-700 group-hover:brightness-95 transition-all"
+      <div className="relative inline-flex items-center justify-center group/drag">
+        <button
+          title={publicado ? `Publicado: ${vendedorPlaneado.nombre}` : `Planeado: ${vendedorPlaneado.nombre}`}
+          onClick={() => !isDragging && id !== null && onEditar(id, pdvNombre, fecha, vendedorPlaneado.id)}
+          className="group/badge"
         >
-          {iniciales(vendedorPlaneado.nombre)}
-        </Badge>
-      </button>
+          <Badge
+            variant="outline"
+            className={publicado
+              ? "text-[10px] px-1.5 py-0.5 h-auto bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700 group-hover/badge:brightness-95 transition-all"
+              : "text-[10px] px-1.5 py-0.5 h-auto bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-700 group-hover/badge:brightness-95 transition-all"
+            }
+          >
+            {publicado && <Send className="size-2 mr-0.5" />}
+            {iniciales(vendedorPlaneado.nombre)}
+          </Badge>
+        </button>
+        {/* Manija de arrastre estilo Excel */}
+        <div
+          className={`absolute -bottom-1 -right-1 size-2.5 rounded-[2px] cursor-crosshair opacity-0 group-hover/drag:opacity-100 transition-opacity z-10 ${publicado ? "bg-emerald-500" : "bg-blue-500"}`}
+          title="Arrastrar para rellenar celdas vacías hacia abajo"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDragStart(pdvId, fecha, vendedorPlaneado.id);
+          }}
+        />
+      </div>
     );
   }
 
@@ -1784,6 +1890,114 @@ function Handle() {
   return (
     <div className="mb-3 flex justify-center">
       <div className="h-1.5 w-12 rounded-full bg-muted-foreground/30" />
+    </div>
+  );
+}
+
+// ─── SelectorMesPicker — grilla tipo calendario de meses ─────────────────────
+
+const NOMBRES_MES = [
+  "Ene", "Feb", "Mar", "Abr", "May", "Jun",
+  "Jul", "Ago", "Sep", "Oct", "Nov", "Dic",
+];
+
+interface SelectorMesPickerProps {
+  mes:      string;                                  // YYYY-MM seleccionado
+  opciones: { valor: string; etiqueta: string }[];   // meses disponibles
+  onChange: (valor: string) => void;
+}
+
+function SelectorMesPicker({ mes, opciones, onChange }: SelectorMesPickerProps) {
+  const [abierto, setAbierto] = useState(false);
+  const [anioVista, setAnioVista] = useState(() => parseInt(mes.slice(0, 4)));
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Nombre largo del mes seleccionado
+  const etiqueta = opciones.find((o) => o.valor === mes)?.etiqueta ?? mes;
+
+  // Conjunto de valores disponibles
+  const disponibles = new Set(opciones.map((o) => o.valor));
+
+  // Cerrar al hacer clic fuera
+  useEffect(() => {
+    if (!abierto) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setAbierto(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [abierto]);
+
+  const seleccionar = (valor: string) => {
+    if (!disponibles.has(valor)) return;
+    onChange(valor);
+    setAbierto(false);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      {/* Botón que muestra el mes actual */}
+      <button
+        type="button"
+        onClick={() => { setAnioVista(parseInt(mes.slice(0, 4))); setAbierto((p) => !p); }}
+        className="h-9 min-w-[9rem] px-3 text-sm font-medium text-center hover:bg-muted/50 transition-colors rounded-md"
+      >
+        {etiqueta}
+      </button>
+
+      {/* Popover con grilla de meses */}
+      {abierto && (
+        <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 z-50 w-64 rounded-xl border bg-background shadow-xl p-3 animate-in fade-in slide-in-from-top-1 duration-150">
+          {/* Navegación de año */}
+          <div className="flex items-center justify-between mb-3">
+            <button
+              type="button"
+              onClick={() => setAnioVista((y) => y - 1)}
+              className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted transition-colors"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+            <span className="text-sm font-bold">{anioVista}</span>
+            <button
+              type="button"
+              onClick={() => setAnioVista((y) => y + 1)}
+              className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted transition-colors"
+            >
+              <ChevronRight className="size-4" />
+            </button>
+          </div>
+
+          {/* Grilla 4×3 de meses */}
+          <div className="grid grid-cols-4 gap-1">
+            {NOMBRES_MES.map((nombre, idx) => {
+              const numMes  = String(idx + 1).padStart(2, "0");
+              const valor   = `${anioVista}-${numMes}`;
+              const activo  = valor === mes;
+              const habilitado = disponibles.has(valor);
+
+              return (
+                <button
+                  key={valor}
+                  type="button"
+                  onClick={() => seleccionar(valor)}
+                  disabled={!habilitado}
+                  className={`h-10 rounded-lg text-sm font-medium transition-colors ${
+                    activo
+                      ? "bg-primary text-primary-foreground"
+                      : habilitado
+                      ? "hover:bg-muted text-foreground"
+                      : "text-muted-foreground/30 cursor-not-allowed"
+                  }`}
+                >
+                  {nombre}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

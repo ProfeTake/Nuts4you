@@ -3,12 +3,12 @@
 // Muestra KPIs del día/mes, gráfico de ventas por sucursal,
 // desglose por categoría, proyección y últimos 7 días.
 
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   DollarSign, AlertTriangle, PackageX, TrendingUp,
   ArrowUpRight, ArrowDownRight, Loader2, ChevronDown,
-  ChevronUp, CalendarDays, Target, AlertCircle,
+  ChevronUp, CalendarDays, Target, AlertCircle, Receipt, ShieldAlert,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -19,6 +19,8 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { apiGet } from "@/lib/api";
 import { formatearCLP } from "@/lib/money";
+import { useNavigate } from "react-router-dom";
+import type { ResumenFacturasMes } from "@/tipos/admin.tipos";
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -114,6 +116,7 @@ function TooltipGrafico({ active, payload }: { active?: boolean; payload?: { val
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export function PanelAdmin() {
+  const navigate = useNavigate();
   const mesActual = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
   const [mesSeleccionado, setMesSeleccionado] = useState(mesActual);
   const [expandidosSuc, setExpandidosSuc] = useState<Set<number>>(new Set());
@@ -131,6 +134,18 @@ export function PanelAdmin() {
     queryKey: ['admin', 'resumen-diario', mesSeleccionado],
     queryFn: () =>
       apiGet<{ data: ResumenDiarioAPI }>(`/admin/resumen-diario?fecha=${fechaConsulta}`).then(r => r.data),
+  });
+
+  const { data: resumenFacturas } = useQuery({
+    queryKey: ['admin', 'resumen-facturas', mesSeleccionado],
+    queryFn: () =>
+      apiGet<{ data: ResumenFacturasMes }>(`/proveedores/facturas/resumen?mes=${mesSeleccionado}`).then(r => r.data),
+  });
+
+  const { data: cierresHoy = [] } = useQuery({
+    queryKey: ['cierres-preventivos', 'hoy'],
+    queryFn: () => apiGet<{ data: number[] }>('/cierres-preventivos/hoy').then(r => r.data),
+    refetchInterval: 60_000,
   });
 
   const toggleSucursal = (id: number) =>
@@ -266,6 +281,48 @@ export function PanelAdmin() {
         </Card>
       </div>
 
+      {/* ── Resumen de compras (Facturas) ── */}
+      {resumenFacturas && (resumenFacturas.totalFacturas > 0 || true) && (
+        <button
+          onClick={() => navigate('/admin/facturas')}
+          className="w-full text-left"
+        >
+          <Card className="hover:border-primary/40 transition-colors cursor-pointer">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                <Receipt className="size-4" />
+                Compras a Proveedores — {mesLabel(mesSeleccionado)}
+              </CardTitle>
+              <span className="text-xs text-muted-foreground">Ver todo →</span>
+            </CardHeader>
+            <CardContent>
+              {resumenFacturas.totalFacturas === 0 ? (
+                <p className="text-sm text-muted-foreground">Sin facturas registradas este mes</p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-6">
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums">{formatearCLP(resumenFacturas.montoTotal)}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{resumenFacturas.totalFacturas} factura{resumenFacturas.totalFacturas !== 1 ? 's' : ''} en el mes</p>
+                  </div>
+                  {resumenFacturas.pendiente > 0 && (
+                    <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 px-3 py-1.5">
+                      <p className="text-sm font-semibold text-amber-700 dark:text-amber-400 tabular-nums">{formatearCLP(resumenFacturas.pendiente)}</p>
+                      <p className="text-xs text-amber-600 dark:text-amber-500">por pagar</p>
+                    </div>
+                  )}
+                  {resumenFacturas.pagada > 0 && (
+                    <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/30 px-3 py-1.5">
+                      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400 tabular-nums">{formatearCLP(resumenFacturas.pagada)}</p>
+                      <p className="text-xs text-emerald-600 dark:text-emerald-500">pagadas</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </button>
+      )}
+
       {/* ── Gráficos ── */}
       <div className="grid gap-4 lg:grid-cols-5">
 
@@ -389,14 +446,21 @@ export function PanelAdmin() {
                   const metricas = datos.ventasMensualesPorSucursal.find(v => v.pdvId === suc.pdvId);
                   const expandida = expandidosSuc.has(suc.pdvId);
                   return (
-                    <>
+                    <Fragment key={suc.pdvId}>
                       <tr
-                        key={suc.pdvId}
                         className="border-b cursor-pointer hover:bg-muted/40 transition-colors"
                         onClick={() => toggleSucursal(suc.pdvId)}
                       >
                         <td className="px-4 py-3">
-                          <p className="font-semibold">{suc.nombre}</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-semibold">{suc.nombre}</p>
+                            {cierresHoy.includes(suc.pdvId) && (
+                              <Badge className="text-[10px] px-1.5 py-0 h-4 bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 gap-0.5">
+                                <ShieldAlert className="size-2.5" />
+                                Cierre prev.
+                              </Badge>
+                            )}
+                          </div>
                           {suc.vendedor && <p className="text-xs text-muted-foreground">{suc.vendedor}</p>}
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums font-medium">{formatearCLP(suc.ventaHoy)}</td>
@@ -424,7 +488,7 @@ export function PanelAdmin() {
 
                       {/* Desglose expandido */}
                       {expandida && metricas && (
-                        <tr key={`${suc.pdvId}-detalle`} className="border-b bg-muted/20">
+                        <tr className="border-b bg-muted/20">
                           <td colSpan={6} className="px-4 py-4">
                             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 
@@ -481,7 +545,7 @@ export function PanelAdmin() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>

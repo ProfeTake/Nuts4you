@@ -18,6 +18,8 @@ import {
   LogOut,
   ShoppingBag,
   ChevronRight,
+  Receipt,
+  ShieldAlert,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -47,19 +49,22 @@ interface AdminLayoutProps {
 // ─── Items de navegación ───
 
 const ITEMS_ADMIN: ItemNav[] = [
-  { clave: "dashboard",  ruta: "/admin",            label: "Dashboard",  icono: <LayoutDashboard className="size-5" /> },
-  { clave: "sucursales", ruta: "/admin/sucursales",  label: "Sucursales", icono: <Store className="size-5" /> },
-  { clave: "bodega",     ruta: "/admin/bodega",      label: "Bodega",     icono: <Warehouse className="size-5" /> },
-  { clave: "finanzas",   ruta: "/admin/finanzas",    label: "Finanzas",   icono: <Landmark className="size-5" /> },
-  { clave: "personal",   ruta: "/admin/personal",    label: "Personal",   icono: <Users className="size-5" /> },
-  { clave: "usuarios",   ruta: "/admin/usuarios",    label: "Usuarios",   icono: <UserCog className="size-5" /> },
+  { clave: "dashboard",  ruta: "/admin",             label: "Dashboard",  icono: <LayoutDashboard className="size-5" /> },
+  { clave: "sucursales",        ruta: "/admin/sucursales",        label: "Sucursales",      icono: <Store className="size-5" /> },
+  { clave: "cierre-preventivo", ruta: "/admin/cierre-preventivo", label: "Cierre Prev.",    icono: <ShieldAlert className="size-5" /> },
+  { clave: "bodega",            ruta: "/admin/bodega",            label: "Bodega",          icono: <Warehouse className="size-5" /> },
+  { clave: "finanzas",          ruta: "/admin/finanzas",          label: "Finanzas",        icono: <Landmark className="size-5" /> },
+  { clave: "facturas",          ruta: "/admin/facturas",          label: "Facturas",        icono: <Receipt className="size-5" /> },
+  { clave: "personal",          ruta: "/admin/personal",          label: "Personal",        icono: <Users className="size-5" /> },
+  { clave: "usuarios",          ruta: "/admin/usuarios",          label: "Usuarios",        icono: <UserCog className="size-5" /> },
 ];
 
 // Supervisor: solo ve operaciones del día (sin resúmenes mensuales, RRHH ni usuarios)
 const ITEMS_SUPERVISOR: ItemNav[] = [
-  { clave: "sucursales", ruta: "/admin/sucursales",  label: "Sucursales", icono: <Store className="size-5" /> },
-  { clave: "bodega",     ruta: "/admin/bodega",      label: "Bodega",     icono: <Warehouse className="size-5" /> },
-  { clave: "finanzas",   ruta: "/admin/finanzas",    label: "Finanzas",   icono: <Landmark className="size-5" /> },
+  { clave: "sucursales",        ruta: "/admin/sucursales",        label: "Sucursales",   icono: <Store className="size-5" /> },
+  { clave: "cierre-preventivo", ruta: "/admin/cierre-preventivo", label: "Cierre Prev.", icono: <ShieldAlert className="size-5" /> },
+  { clave: "bodega",            ruta: "/admin/bodega",            label: "Bodega",       icono: <Warehouse className="size-5" /> },
+  { clave: "finanzas",          ruta: "/admin/finanzas",          label: "Finanzas",     icono: <Landmark className="size-5" /> },
 ];
 
 // ─── Componente principal ───
@@ -172,7 +177,7 @@ export function LayoutAdmin({ onCerrarSesion, onEntrarModoPos, children }: Admin
 
   return (
     <ContextoAdminMenu.Provider value={{ abrirMenu }}>
-      <div className="flex h-screen w-full overflow-hidden bg-background">
+      <div className="flex h-dvh w-full overflow-hidden bg-background">
         {/* ── Sidebar Desktop (>= lg) ── */}
         <aside className="hidden lg:flex lg:w-64 lg:flex-col lg:border-r lg:bg-card">
           {contenidoSidebar}

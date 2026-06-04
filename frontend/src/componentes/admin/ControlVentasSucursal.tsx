@@ -469,42 +469,48 @@ export function ControlVentasSucursal() {
                     </p>
                   </div>
                 )}
-                <div className="grid gap-3 sm:grid-cols-[1fr_1.5fr_auto]">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="monto-retiro">Monto ($)</Label>
-                    <Input
-                      id="monto-retiro"
-                      type="number"
-                      min={1}
-                      step={1000}
-                      placeholder="Ej: 50000"
-                      value={montoRetiro}
-                      onChange={(e) => setMontoRetiro(e.target.value)}
-                    />
+                <div className="space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="monto-retiro">Monto ($)</Label>
+                      <Input
+                        id="monto-retiro"
+                        type="number"
+                        min={1}
+                        step={1000}
+                        placeholder="Ej: 50000"
+                        value={montoRetiro}
+                        onChange={(e) => setMontoRetiro(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="desc-retiro">
+                        Justificación <span className="text-destructive">*</span>
+                      </Label>
+                      <Input
+                        id="desc-retiro"
+                        placeholder="Motivo del retiro (obligatorio)"
+                        value={descRetiro}
+                        onChange={(e) => setDescRetiro(e.target.value)}
+                        maxLength={200}
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="desc-retiro">Descripción (opcional)</Label>
-                    <Input
-                      id="desc-retiro"
-                      placeholder="Ej: Retiro tarde"
-                      value={descRetiro}
-                      onChange={(e) => setDescRetiro(e.target.value)}
-                      maxLength={100}
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <Button
-                      onClick={handleRetiro}
-                      disabled={!montoRetiro || mutacionRetiro.isPending}
-                      className="w-full bg-amber-600 hover:bg-amber-700 text-white"
-                    >
-                      {mutacionRetiro.isPending ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        "Registrar"
-                      )}
-                    </Button>
-                  </div>
+                  {!descRetiro.trim() && montoRetiro && (
+                    <p className="text-xs text-destructive">Debes ingresar una justificación para registrar el retiro.</p>
+                  )}
+                  <Button
+                    onClick={handleRetiro}
+                    disabled={!montoRetiro || !descRetiro.trim() || mutacionRetiro.isPending}
+                    className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white"
+                  >
+                    {mutacionRetiro.isPending ? (
+                      <Loader2 className="size-4 animate-spin mr-2" />
+                    ) : (
+                      <ArrowUpCircle className="size-4 mr-2" />
+                    )}
+                    Registrar retiro
+                  </Button>
                 </div>
               </CardContent>
             </Card>

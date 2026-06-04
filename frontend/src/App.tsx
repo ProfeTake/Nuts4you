@@ -17,6 +17,8 @@ import {
   DepositosFinanzas,
   ModuloRRHH,
   GestorUsuarios,
+  GestorFacturas,
+  GestorCierrePreventivo,
 } from "@/componentes/admin";
 
 // Layouts
@@ -81,8 +83,10 @@ function LayoutAdminConRutas({ onCerrarSesion, onEntrarModoPos }: LayoutAdminCon
       <Routes>
         <Route index element={<PanelAdmin />} />
         <Route path="sucursales" element={<ControlVentasSucursal />} />
+        <Route path="cierre-preventivo" element={<GestorCierrePreventivo />} />
         <Route path="bodega" element={<GestorInventario />} />
         <Route path="finanzas" element={<DepositosFinanzas />} />
+        <Route path="facturas" element={<GestorFacturas />} />
         <Route path="personal" element={<ModuloRRHH />} />
         <Route path="usuarios" element={<GestorUsuarios />} />
       </Routes>

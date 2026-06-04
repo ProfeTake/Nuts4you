@@ -65,7 +65,9 @@ export type PaginaAdmin =
   | "bodega"
   | "finanzas"
   | "personal"
-  | "usuarios";
+  | "usuarios"
+  | "facturas"
+  | "cierre-preventivo";
 
 // ─── Dashboard: ventas por sucursal (gráfico de barras) ───
 
@@ -166,6 +168,50 @@ export interface FilaDeposito {
   estado: EstadoDeposito;
 }
 
+// ─── Facturas de Proveedores ───
+
+export interface ProveedorItem {
+  id:           number;
+  nombre:       string;
+  rut:          string | null;
+  contacto:     string | null;
+  activo:       boolean;
+  banco:        string | null;
+  tipo_cuenta:  string | null;
+  numero_cuenta: string | null;
+}
+
+export type EstadoFactura = "PENDIENTE" | "PAGADA" | "ANULADA";
+
+export interface DetalleFacturaItem {
+  id:             number;
+  descripcion:    string;
+  cantidad:       number;
+  precioUnitario: number;
+}
+
+export interface FacturaProveedor {
+  id:               number;
+  proveedorId:      number;
+  proveedorNombre:  string;
+  numeroFactura:    string;
+  fecha:            string;
+  fechaVencimiento: string | null;
+  montoTotal:       number;
+  estado:           EstadoFactura;
+  notas:            string | null;
+  creadoEn:         string;
+  items:            DetalleFacturaItem[];
+}
+
+export interface ResumenFacturasMes {
+  mes:           string;
+  totalFacturas: number;
+  montoTotal:    number;
+  pendiente:     number;
+  pagada:        number;
+}
+
 // ─── Sueldos y Personal ───
 
 export interface FilaPersonal {
@@ -178,4 +224,23 @@ export interface FilaPersonal {
   bonos: number;
   descuentosFaltante: number;
   totalAPagar: number;
+}
+
+// ─── Cierre Preventivo ───
+
+export interface ChecklistItem {
+  label:   string;
+  marcado: boolean;
+}
+
+export interface CierrePreventivo {
+  id:            number;
+  pdvId:         number;
+  pdvNombre:     string;
+  usuarioNombre: string;
+  fecha:         string;
+  montoRetiro:   number;
+  checklist:     ChecklistItem[];
+  notasVendedor: string | null;
+  observaciones: string | null;
 }

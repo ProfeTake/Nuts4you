@@ -12,6 +12,8 @@ import rutasRRHH        from "./rrhh.rutas";
 import rutasUsuarios    from "./usuarios.rutas";
 import rutasSolicitudes    from "./solicitudes.rutas";
 import rutasNotificaciones from "./notificaciones.rutas";
+import rutasProveedores       from "./proveedores.rutas";
+import rutasCierrePreventivo  from "./cierrePreventivo.rutas";
 
 const rutaPrincipal = Router();
 
@@ -26,5 +28,7 @@ rutaPrincipal.use("/rrhh",        rutasRRHH);
 rutaPrincipal.use("/usuarios",    rutasUsuarios);
 rutaPrincipal.use("/solicitudes",    rutasSolicitudes);
 rutaPrincipal.use("/notificaciones", rutasNotificaciones);
+rutaPrincipal.use("/proveedores",          rutasProveedores);
+rutaPrincipal.use("/cierres-preventivos",  rutasCierrePreventivo);
 
 export default rutaPrincipal;

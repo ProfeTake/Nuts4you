@@ -8,3 +8,5 @@ export { DepositosFinanzas } from "./DepositosFinanzas";
 export { ModuloRRHH } from "./ModuloRRHH";
 export { FormularioDespacho } from "./FormularioDespacho";
 export { GestorUsuarios } from "./GestorUsuarios";
+export { GestorFacturas } from "./GestorFacturas";
+export { GestorCierrePreventivo } from "./GestorCierrePreventivo";

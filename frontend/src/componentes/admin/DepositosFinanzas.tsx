@@ -135,11 +135,18 @@ export function DepositosFinanzas() {
     onError: () => toast.error("No se pudo confirmar el depósito"),
   });
 
-  // ── Sucursales únicas para el filtro ──
-  const sucursalesUnicas = useMemo(() => {
-    const set = new Set(registros.map((r) => r.sucursalNombre));
-    return Array.from(set).sort();
-  }, [registros]);
+  // ── PDVs para el filtro de sucursal ──
+  const { data: pdvs = [] } = useQuery({
+    queryKey: ["pdvs-activos"],
+    queryFn: () =>
+      apiGet<{ data: { id: number; nombre: string; tipo: string; activo: boolean }[] }>(
+        "/admin/pdvs"
+      ).then((r) => r.data.filter((p) => p.tipo === "PUNTO_VENTA" && p.activo)),
+  });
+  const sucursalesUnicas = useMemo(
+    () => pdvs.map((p) => p.nombre).sort(),
+    [pdvs]
+  );
 
   // ── Registros filtrados ──
   const filtrados = useMemo(() => {

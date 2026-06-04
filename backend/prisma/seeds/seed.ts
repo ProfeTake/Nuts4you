@@ -36,7 +36,7 @@ async function main() {
   console.log('✓ Sucursales:', sucursalesData.map((s) => s.nombre).join(', '))
 
   // ─── Categorías ───────────────────────────────────────────────────────────────
-  const categoriaNames = ['Mezclas', 'Paquetes', 'Promos', 'Líquidos']
+  const categoriaNames = ['Mezclas', 'Paquetes', 'Promos', 'Líquidos', 'Helados', 'Otros']
   for (const nombre of categoriaNames) {
     await prisma.categoria.upsert({
       where: { nombre },
@@ -51,28 +51,29 @@ async function main() {
   const catPaquetes = await prisma.categoria.findUniqueOrThrow({ where: { nombre: 'Paquetes' } })
   const catPromos   = await prisma.categoria.findUniqueOrThrow({ where: { nombre: 'Promos' } })
   const catLiquidos = await prisma.categoria.findUniqueOrThrow({ where: { nombre: 'Líquidos' } })
+  const catHelados  = await prisma.categoria.findUniqueOrThrow({ where: { nombre: 'Helados' } })
 
   const productosData = [
-    // Mezclas (materia prima — precio referencial, no se venden directamente)
-    { nombre: 'MM',      categoriaId: catMezclas.id,  precioVenta:    0, costo: 600  },
-    { nombre: 'MA',      categoriaId: catMezclas.id,  precioVenta:    0, costo: 1200 },
-    { nombre: 'MN',      categoriaId: catMezclas.id,  precioVenta:    0, costo: 1500 },
-    { nombre: 'MPr',     categoriaId: catMezclas.id,  precioVenta:    0, costo: 900  },
-    { nombre: 'MH',      categoriaId: catMezclas.id,  precioVenta:    0, costo: 1000 }, // Mezcla Helado
+    // Mezclas (materia prima)
+    { nombre: 'Mezcla Maní',          categoriaId: catMezclas.id,  precioVenta:    0, costo: 600  },
+    { nombre: 'Mezcla Almendras',      categoriaId: catMezclas.id,  precioVenta:    0, costo: 1200 },
+    { nombre: 'Mezcla Nueces',         categoriaId: catMezclas.id,  precioVenta:    0, costo: 1500 },
+    { nombre: 'Mezcla Promo',          categoriaId: catMezclas.id,  precioVenta:    0, costo: 900  },
+    { nombre: 'Mezcla Helado',         categoriaId: catMezclas.id,  precioVenta:    0, costo: 1000 },
     // Paquetes
-    { nombre: 'pm',      categoriaId: catPaquetes.id, precioVenta:  800, costo: 350  },
-    { nombre: 'pa',      categoriaId: catPaquetes.id, precioVenta: 1000, costo: 450  },
-    { nombre: 'pn',      categoriaId: catPaquetes.id, precioVenta: 1000, costo: 450  },
-    // Promos (pp)
-    { nombre: 'pp',      categoriaId: catPromos.id,   precioVenta: 1500, costo: 700  },
+    { nombre: 'Paquetes Maní',         categoriaId: catPaquetes.id, precioVenta:  800, costo: 350  },
+    { nombre: 'Paquetes Almendras',    categoriaId: catPaquetes.id, precioVenta: 1000, costo: 450  },
+    { nombre: 'Paquetes Nueces',       categoriaId: catPaquetes.id, precioVenta: 1000, costo: 450  },
+    // Promos
+    { nombre: 'Paquetes Promo',        categoriaId: catPromos.id,   precioVenta: 1500, costo: 700  },
     // Líquidos
-    { nombre: 'AM CG',   categoriaId: catLiquidos.id, precioVenta:  800, costo: 400  },
-    { nombre: 'AM SG',   categoriaId: catLiquidos.id, precioVenta:  800, costo: 400  },
-    { nombre: 'ENE',     categoriaId: catLiquidos.id, precioVenta: 1500, costo: 900  },
-    { nombre: 'BEB',     categoriaId: catLiquidos.id, precioVenta: 1500, costo: 700  },
-    { nombre: 'KAPO',    categoriaId: catLiquidos.id, precioVenta:  500, costo: 200  },
+    { nombre: 'Agua Mineral Con Gas',  categoriaId: catLiquidos.id, precioVenta:  800, costo: 400  },
+    { nombre: 'Agua Mineral Sin Gas',  categoriaId: catLiquidos.id, precioVenta:  800, costo: 400  },
+    { nombre: 'Energéticas',           categoriaId: catLiquidos.id, precioVenta: 1500, costo: 900  },
+    { nombre: 'Bebidas',               categoriaId: catLiquidos.id, precioVenta: 1500, costo: 700  },
+    { nombre: 'Jugos Kapo',            categoriaId: catLiquidos.id, precioVenta:  500, costo: 200  },
     // Helados
-    { nombre: 'Helados', categoriaId: catPromos.id,   precioVenta: 1000, costo: 500  },
+    { nombre: 'Helados',               categoriaId: catHelados.id,  precioVenta: 1000, costo: 500  },
   ]
   for (const p of productosData) {
     await prisma.producto.upsert({

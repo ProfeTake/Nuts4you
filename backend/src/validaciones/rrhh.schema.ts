@@ -5,6 +5,7 @@ export const crearPersonalSchema = z.object({
   rut:        z.string().min(9).max(12),
   pdvId:      z.number().int().positive().nullable().optional(),
   pagoDiario: z.number().int().min(0).default(28000),
+  email:      z.string().email().max(100).nullable().optional(),
 })
 
 export const editarPersonalSchema = z.object({
@@ -12,6 +13,7 @@ export const editarPersonalSchema = z.object({
   pdvId:      z.number().int().positive().nullable().optional(),
   pagoDiario: z.number().int().min(0).optional(),
   activo:     z.boolean().optional(),
+  email:      z.string().email().max(100).nullable().optional(),
 })
 
 export type CrearPersonalInput  = z.infer<typeof crearPersonalSchema>

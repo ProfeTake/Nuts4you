@@ -19,6 +19,7 @@ model Usuario {
   pdv_id        Int?
   rut           String      @unique
   nombre        String
+  email         String?     @unique
   password_hash String
   activo        Boolean     @default(true)
   pago_diario   Int         @default(28000)
@@ -29,6 +30,7 @@ model Usuario {
   solicitudes         Solicitud[]
   turnos_planeados    TurnoPlaneado[]
   notificaciones      Notificacion[]
+  cierres_preventivos CierrePreventivo[]
 }
 
 enum TipoPDV {
@@ -49,6 +51,7 @@ model PDV {
   registros_diarios   RegistroDiario[]
   solicitudes         Solicitud[]
   turnos_planeados    TurnoPlaneado[]
+  cierres_preventivos CierrePreventivo[]
 }
 
 model Categoria {
@@ -58,16 +61,17 @@ model Categoria {
 }
 
 model Producto {
-  id           Int             @id @default(autoincrement())
-  categoria_id Int
-  nombre       String
-  precio_venta Int
-  costo        Int
-  activo       Boolean         @default(true)
-  categoria    Categoria       @relation(fields: [categoria_id], references: [id])
-  inventarios  Inventario[]
-  movimientos  MovimientoInv[]
-  solicitudes  SolicitudItem[]
+  id            Int             @id @default(autoincrement())
+  categoria_id  Int
+  nombre        String
+  precio_venta  Int
+  costo         Int
+  activo        Boolean         @default(true)
+  codigo_barra  String?         @unique
+  categoria     Categoria       @relation(fields: [categoria_id], references: [id])
+  inventarios   Inventario[]
+  movimientos   MovimientoInv[]
+  solicitudes   SolicitudItem[]
 }
 
 model Inventario {
@@ -241,10 +245,77 @@ model TurnoPlaneado {
   fecha      DateTime @db.Date
   pdv_id     Int
   usuario_id Int
+  publicado  Boolean  @default(false)
   pdv        PDV      @relation(fields: [pdv_id], references: [id])
   usuario    Usuario  @relation(fields: [usuario_id], references: [id])
 
   @@unique([fecha, pdv_id])
   // usuario_id ya indexado por MySQL como FK; fecha cubierta por el @@unique
+  @@index([fecha])
+}
+
+// ─── Módulo de Facturas de Proveedores ───────────────────────────────────────
+
+model Proveedor {
+  id            Int                @id @default(autoincrement())
+  nombre        String
+  rut           String?            @unique
+  contacto      String?
+  activo        Boolean            @default(true)
+  banco         String?
+  tipo_cuenta   String?
+  numero_cuenta String?
+  facturas      FacturaProveedor[]
+}
+
+enum EstadoFactura {
+  PENDIENTE
+  PAGADA
+  ANULADA
+}
+
+model FacturaProveedor {
+  id                Int              @id @default(autoincrement())
+  proveedor_id      Int
+  numero_factura    String
+  fecha             DateTime         @db.Date
+  fecha_vencimiento DateTime?        @db.Date
+  monto_total       Int
+  estado            EstadoFactura    @default(PENDIENTE)
+  notas             String?          @db.Text
+  creado_en         DateTime         @default(now())
+  proveedor         Proveedor        @relation(fields: [proveedor_id], references: [id])
+  items             DetalleFactura[]
+
+  @@index([fecha])
+  @@index([estado])
+  @@index([proveedor_id])
+}
+
+model DetalleFactura {
+  id              Int              @id @default(autoincrement())
+  factura_id      Int
+  descripcion     String
+  cantidad        Int
+  precio_unitario Int
+  factura         FacturaProveedor @relation(fields: [factura_id], references: [id], onDelete: Cascade)
+  // factura_id indexado por MySQL como FK
+}
+
+// ─── Cierre Preventivo ────────────────────────────────────────────────────────
+
+model CierrePreventivo {
+  id             Int      @id @default(autoincrement())
+  pdv_id         Int
+  usuario_id     Int
+  fecha          DateTime @default(now())
+  monto_retiro   Int      @default(0)
+  checklist      Json
+  notas_vendedor String?  @db.Text
+  observaciones  String?  @db.Text
+  pdv            PDV      @relation(fields: [pdv_id], references: [id])
+  usuario        Usuario  @relation(fields: [usuario_id], references: [id])
+
+  @@index([pdv_id])
   @@index([fecha])
 }

@@ -32,6 +32,7 @@ import {
   Clock,
   Loader2,
   CheckCircle2,
+  Mail,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -65,6 +66,7 @@ interface Personal {
   id:          number;
   nombre:      string;
   rut:         string;
+  email:       string | null;
   pdvId:       number | null;
   pdvNombre:   string | null;
   pagoDiario:  number;
@@ -102,10 +104,11 @@ interface FormPersonal {
   rut:        string;
   pdvId:      string;
   pagoDiario: string;
+  email:      string;
 }
 
 const FORM_PERSONAL_VACIO: FormPersonal = {
-  nombre: "", rut: "", pdvId: "", pagoDiario: "28000",
+  nombre: "", rut: "", pdvId: "", pagoDiario: "28000", email: "",
 };
 
 // ─── Panel activo ────────────────────────────────────────────────────────────
@@ -254,6 +257,7 @@ export function ModuloRRHH() {
       rut:        p.rut,
       pdvId:      p.pdvId ? String(p.pdvId) : "",
       pagoDiario: String(p.pagoDiario),
+      email:      p.email ?? "",
     });
     setPanel({ tipo: "editar-personal", personal: p });
   }, []);
@@ -264,17 +268,19 @@ export function ModuloRRHH() {
     const pdvId     = formPersonal.pdvId ? parseInt(formPersonal.pdvId, 10) : null;
     const pagoDiario = parseInt(formPersonal.pagoDiario, 10) || 28000;
 
+    const email = formPersonal.email.trim() || null;
     if (panel?.tipo === "crear-personal") {
       mutCrear.mutate({
         nombre:     formPersonal.nombre.trim(),
         rut:        formPersonal.rut.trim(),
         pdvId,
         pagoDiario,
+        email,
       });
     } else if (panel?.tipo === "editar-personal") {
       mutEditar.mutate({
         id: panel.personal.id,
-        payload: { nombre: formPersonal.nombre.trim(), pdvId, pagoDiario },
+        payload: { nombre: formPersonal.nombre.trim(), pdvId, pagoDiario, email },
       });
     }
   }, [formPersonal, panel, mutCrear, mutEditar]);
@@ -440,6 +446,7 @@ export function ModuloRRHH() {
                         <th className="px-4 py-3 font-medium">Sucursal</th>
                         <th className="px-4 py-3 font-medium text-right">Pago / Día</th>
                         <th className="px-4 py-3 font-medium text-center">Estado</th>
+                        <th className="px-4 py-3 font-medium text-center">Correo</th>
                         <th className="px-4 py-3 font-medium">Último turno</th>
                         <th className="px-4 py-3 font-medium text-center">Acciones</th>
                       </tr>
@@ -457,6 +464,11 @@ export function ModuloRRHH() {
                           </td>
                           <td className="px-4 py-3 text-center">
                             <EstadoBadge activo={p.activo} />
+                          </td>
+                          <td className="px-4 py-3 text-center" title={p.email ?? "Sin correo configurado"}>
+                            {p.email
+                              ? <Mail className="size-3.5 text-sky-600 inline" />
+                              : <span className="text-muted-foreground/40 text-xs">—</span>}
                           </td>
                           <td className="px-4 py-3 text-xs text-muted-foreground">
                             {p.ultimoTurno
@@ -847,6 +859,25 @@ export function ModuloRRHH() {
                   setFormPersonal((p) => ({ ...p, pagoDiario: e.target.value.replace(/\D/g, "") }))
                 }
               />
+            </div>
+
+            {/* Email */}
+            <div className="space-y-1.5">
+              <Label htmlFor="p-email" className="flex items-center gap-1.5">
+                <Mail className="size-3.5 text-muted-foreground" />
+                Correo electrónico
+                <span className="text-xs text-muted-foreground font-normal">(opcional)</span>
+              </Label>
+              <Input
+                id="p-email"
+                type="email"
+                placeholder="vendedora@gmail.com"
+                value={formPersonal.email}
+                onChange={setField("email")}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Al publicar horarios, se enviará un correo a esta dirección con los turnos del mes.
+              </p>
             </div>
 
             {/* Aviso contraseña (solo al crear) */}

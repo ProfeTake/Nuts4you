@@ -15,6 +15,7 @@ function formatearPersonal(u: {
   id: number
   rut: string
   nombre: string
+  email: string | null
   activo: boolean
   pago_diario: number
   pdv: { id: number; nombre: string } | null
@@ -24,6 +25,7 @@ function formatearPersonal(u: {
     id:          u.id,
     nombre:      u.nombre,
     rut:         u.rut,
+    email:       u.email,
     pdvId:       u.pdv?.id ?? null,
     pdvNombre:   u.pdv?.nombre ?? null,
     pagoDiario:  u.pago_diario,
@@ -70,6 +72,7 @@ export async function crearPersonal(data: CrearPersonalInput) {
     data: {
       rut,
       nombre:        data.nombre,
+      email:         data.email ?? null,
       password_hash: hash,
       rol_id:        rol.id,
       pdv_id:        data.pdvId ?? null,
@@ -90,6 +93,7 @@ export async function editarPersonal(id: number, data: EditarPersonalInput) {
   if (data.pdvId !== undefined)      updateData.pdv_id      = data.pdvId
   if (data.pagoDiario !== undefined) updateData.pago_diario = data.pagoDiario
   if (data.activo !== undefined)     updateData.activo      = data.activo
+  if (data.email !== undefined)      updateData.email       = data.email ?? null
 
   const usuario = await prisma.usuario.update({
     where: { id },
@@ -142,8 +146,8 @@ export async function importarHorarios(data: ImportarHorariosInput) {
     const fecha = new Date(item.fecha)
     await prisma.turnoPlaneado.upsert({
       where: { fecha_pdv_id: { fecha, pdv_id: item.pdvId } },
-      update: { usuario_id: item.usuarioId },
-      create: { fecha, pdv_id: item.pdvId, usuario_id: item.usuarioId },
+      update: { usuario_id: item.usuarioId, publicado: false },
+      create: { fecha, pdv_id: item.pdvId, usuario_id: item.usuarioId, publicado: false },
     })
     procesados++
   }
@@ -184,6 +188,7 @@ export async function getHorarios(mes: string) {
     vendedorReal:     { id: number; nombre: string } | null
     total:            number | null
     estado:           string | null
+    publicado:        boolean
   }>> = {}
 
   for (const t of planeados) {
@@ -195,6 +200,7 @@ export async function getHorarios(mes: string) {
       vendedorReal:     null,
       total:            null,
       estado:           null,
+      publicado:        t.publicado,
     }
   }
 
@@ -202,7 +208,7 @@ export async function getHorarios(mes: string) {
     const fecha = t.fecha_apertura.toISOString().slice(0, 10)
     if (!grid[fecha]) grid[fecha] = {}
     if (!grid[fecha][t.pdv_id]) {
-      grid[fecha][t.pdv_id] = { id: null, vendedorPlaneado: null, vendedorReal: null, total: null, estado: null }
+      grid[fecha][t.pdv_id] = { id: null, vendedorPlaneado: null, vendedorReal: null, total: null, estado: null, publicado: false }
     }
     grid[fecha][t.pdv_id].vendedorReal = { id: t.usuario?.id ?? 0, nombre: t.usuario?.nombre ?? 'Usuario eliminado' }
     grid[fecha][t.pdv_id].total        = t.total_calculado
@@ -290,7 +296,7 @@ export async function publicarHorarios(mes: string) {
     where:   { fecha: { gte: inicio, lt: fin } },
     include: {
       pdv:     { select: { nombre: true } },
-      usuario: { select: { id: true, nombre: true } },
+      usuario: { select: { id: true, nombre: true, email: true } },
     },
     orderBy: [{ usuario_id: 'asc' }, { fecha: 'asc' }],
   })
@@ -298,10 +304,10 @@ export async function publicarHorarios(mes: string) {
   if (turnos.length === 0) throw new Error('No hay turnos planeados para este mes')
 
   // Agrupar por vendedor
-  const porVendedor = new Map<number, { nombre: string; turnos: { fecha: Date; pdvNombre: string }[] }>()
+  const porVendedor = new Map<number, { nombre: string; email: string | null; turnos: { fecha: Date; pdvNombre: string }[] }>()
   for (const t of turnos) {
     const uid = t.usuario_id
-    if (!porVendedor.has(uid)) porVendedor.set(uid, { nombre: t.usuario.nombre, turnos: [] })
+    if (!porVendedor.has(uid)) porVendedor.set(uid, { nombre: t.usuario.nombre, email: t.usuario.email, turnos: [] })
     porVendedor.get(uid)!.turnos.push({ fecha: t.fecha, pdvNombre: t.pdv.nombre })
   }
 
@@ -318,9 +324,15 @@ export async function publicarHorarios(mes: string) {
     notifIds.push(notif.id)
     vendedores.push(info.nombre)
 
-    // Correo opcional — falla silenciosamente si SMTP no está configurado
-    await enviarCorreoHorario({ nombre: info.nombre }, mes, html).catch(() => {})
+    // Correo opcional — falla silenciosamente si SMTP no está configurado o sin email
+    await enviarCorreoHorario({ nombre: info.nombre, correo: info.email }, mes, html).catch(() => {})
   }
+
+  // Marcar todos los turnos del mes como publicados
+  await prisma.turnoPlaneado.updateMany({
+    where: { fecha: { gte: inicio, lt: fin } },
+    data:  { publicado: true },
+  })
 
   return {
     publicados: notifIds.length,

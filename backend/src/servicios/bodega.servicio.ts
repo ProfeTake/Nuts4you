@@ -1,5 +1,5 @@
 import prisma from '../config/prisma'
-import type { DespachoInput, AjustarStockInput, CrearInventarioInput } from '../validaciones/bodega.schema'
+import type { DespachoInput, AjustarStockInput, CrearInventarioInput, CrearProductoInput } from '../validaciones/bodega.schema'
 
 const BODEGA_PDV_ID = 1
 
@@ -32,6 +32,12 @@ export async function ajustarStock(inventarioId: number, data: AjustarStockInput
   const inv = await prisma.inventario.findUniqueOrThrow({ where: { id: inventarioId } })
   if (inv.pdv_id !== BODEGA_PDV_ID) {
     throw new Error('Solo se puede ajustar stock de la bodega central desde aquí')
+  }
+  if (data.nombre) {
+    await prisma.producto.update({
+      where: { id: inv.producto_id },
+      data:  { nombre: data.nombre.trim() },
+    })
   }
   const actualizado = await prisma.inventario.update({
     where: { id: inventarioId },
@@ -167,6 +173,70 @@ export async function eliminarInventarioBodega(inventarioId: number) {
   if (inv.pdv_id !== BODEGA_PDV_ID) throw new Error('Solo se puede eliminar stock de la bodega central')
   await prisma.inventario.delete({ where: { id: inventarioId } })
   return { eliminado: inventarioId }
+}
+
+export async function getCategorias() {
+  return prisma.categoria.findMany({ orderBy: { nombre: 'asc' } })
+}
+
+export async function buscarPorCodigoBarra(codigo: string) {
+  return prisma.producto.findUnique({
+    where: { codigo_barra: codigo },
+    include: { categoria: { select: { nombre: true } } },
+  })
+}
+
+export async function crearProducto(data: CrearProductoInput) {
+  // Resolver categoría: usar la existente o crear una nueva
+  let categoriaId: number
+  if (data.categoriaId) {
+    categoriaId = data.categoriaId
+  } else {
+    const cat = await prisma.categoria.upsert({
+      where:  { nombre: data.categoriaNombre! },
+      update: {},
+      create: { nombre: data.categoriaNombre! },
+    })
+    categoriaId = cat.id
+  }
+
+  // Verificar si el código de barras ya existe
+  if (data.codigoBarra) {
+    const existente = await prisma.producto.findUnique({ where: { codigo_barra: data.codigoBarra } })
+    if (existente) throw new Error(`El código de barras ya está asignado a "${existente.nombre}"`)
+  }
+
+  const producto = await prisma.producto.create({
+    data: {
+      nombre:       data.nombre,
+      categoria_id: categoriaId,
+      precio_venta: data.precioVenta,
+      costo:        data.costo,
+      codigo_barra: data.codigoBarra || null,
+    },
+    include: { categoria: { select: { nombre: true } } },
+  })
+
+  // Crear inventario en bodega central
+  const inv = await prisma.inventario.create({
+    data: {
+      pdv_id:       BODEGA_PDV_ID,
+      producto_id:  producto.id,
+      stock_actual: data.stockActual,
+      stock_critico: data.stockCritico,
+    },
+  })
+
+  return {
+    inventarioId: inv.id,
+    productoId:   producto.id,
+    nombre:       producto.nombre,
+    categoria:    producto.categoria.nombre,
+    codigoBarra:  producto.codigo_barra,
+    precioVenta:  producto.precio_venta,
+    stockActual:  inv.stock_actual,
+    stockCritico: inv.stock_critico,
+  }
 }
 
 export async function getDespachos(pdvId?: number) {
