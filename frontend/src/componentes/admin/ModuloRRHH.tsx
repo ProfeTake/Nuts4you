@@ -56,7 +56,6 @@ import {
 import { formatearCLP } from "@/lib/money";
 import { apiGet, apiPost, apiPatch } from "@/lib/api";
 import { autoFormatRUT } from "@/lib/rut";
-import type { PDVItem } from "@/tipos/admin.tipos";
 import { HorariosTurnos }        from "./HorariosVendedoras";
 import { SeguimientoVendedores } from "./SeguimientoVendedores";
 
@@ -169,10 +168,6 @@ export function ModuloRRHH() {
       apiGet<{ data: LiquidacionAPI[] }>(`/rrhh/nomina?mes=${mesSeleccionado}`).then((r) => r.data),
   });
 
-  const { data: pdvs = [] } = useQuery({
-    queryKey: ["admin", "pdvs"],
-    queryFn:  () => apiGet<{ data: PDVItem[] }>("/admin/pdvs").then((r) => r.data),
-  });
 
   // ── Mutaciones ───────────────────────────────────────────────────────────
 

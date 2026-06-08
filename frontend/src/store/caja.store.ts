@@ -68,9 +68,6 @@ interface TurnoApiResponse {
   };
 }
 
-interface VentaApiResponse {
-  data: { id: number; horaVenta: string };
-}
 
 export interface CuadreCaja {
   efectivo:      number;

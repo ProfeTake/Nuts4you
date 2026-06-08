@@ -645,7 +645,7 @@ export function GestorCierrePreventivo() {
         {/* ── Tab: Historial ── */}
         <TabsContent value="historial">
           <div className="flex flex-wrap gap-3 mb-4">
-            <Select value={filtroPdv} onValueChange={setFiltroPdv}>
+            <Select value={filtroPdv} onValueChange={(v) => setFiltroPdv(v ?? "TODOS")}>
               <SelectTrigger className="w-48">
                 <Store className="size-3.5 mr-1.5 text-muted-foreground" />
                 <SelectValue placeholder="Todas las sucursales" />

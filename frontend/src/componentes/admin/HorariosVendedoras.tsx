@@ -22,7 +22,6 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
-  Users,
   Loader2,
   AlertCircle,
   Trash2,

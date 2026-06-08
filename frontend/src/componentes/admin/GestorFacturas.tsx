@@ -559,7 +559,7 @@ function FormProveedor({
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Tipo de cuenta</Label>
-            <Select value={form.tipoCuenta} onValueChange={(v) => set("tipoCuenta", v)}>
+            <Select value={form.tipoCuenta} onValueChange={(v) => set("tipoCuenta", v ?? "")}>
               <SelectTrigger className="text-sm">
                 <SelectValue placeholder="Seleccionar tipo" />
               </SelectTrigger>
@@ -808,7 +808,7 @@ export function GestorFacturas() {
         <TabsContent value="facturas" className="space-y-4 mt-0">
           {/* Filtros */}
           <div className="flex flex-wrap gap-3 items-center">
-            <Select value={mes} onValueChange={setMes}>
+            <Select value={mes} onValueChange={(v) => setMes(v ?? mes)}>
               <SelectTrigger className="w-44">
                 <SelectValue />
               </SelectTrigger>
@@ -819,7 +819,7 @@ export function GestorFacturas() {
               </SelectContent>
             </Select>
 
-            <Select value={filtroProv} onValueChange={setFiltroProv}>
+            <Select value={filtroProv} onValueChange={(v) => setFiltroProv(v ?? "TODOS")}>
               <SelectTrigger className="w-48">
                 <SelectValue placeholder="Todos los proveedores" />
               </SelectTrigger>

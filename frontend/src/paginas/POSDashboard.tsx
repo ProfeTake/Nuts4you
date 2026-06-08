@@ -754,7 +754,6 @@ function StockSection({ titulo, colorDot, ids, expandido, onToggle, disponible, 
             const disp   = disponible[id];
             const prod   = produccionPorPaq[id] ?? 0;
             const vend   = estVendidos[id];
-            const precio  = precioProd(id);
             const valNum  = stockActual[id] !== "" ? parseInt(stockActual[id], 10) : NaN;
             const sobrestock = !isNaN(valNum) && valNum > disp;
 
