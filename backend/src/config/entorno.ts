@@ -18,7 +18,8 @@ interface ConfigEntorno {
 }
 
 const entorno: ConfigEntorno = {
-  puerto:        Number(process.env.PUERTO) || 3001,
+  // Railway inyecta PORT automáticamente; PUERTO es el nombre local. Se respeta PORT primero.
+  puerto:        Number(process.env.PORT || process.env.PUERTO) || 3001,
   databaseUrl:   process.env.DATABASE_URL || "",
   nodoEntorno:   process.env.NODE_ENV || "development",
   jwtSecret:     process.env.JWT_SECRET || "nuts4you_dev_secret_cambiar_en_prod",

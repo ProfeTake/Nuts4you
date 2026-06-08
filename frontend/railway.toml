@@ -1,6 +1,6 @@
 [build]
-buildCommand = "npm ci --legacy-peer-deps && npm run build"
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "npx serve -s dist -l ${PORT:-3000}"
 restartPolicyType = "on_failure"
