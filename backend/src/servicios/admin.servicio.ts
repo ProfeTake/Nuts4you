@@ -239,7 +239,7 @@ export async function getVentasSucursal(pdvId: number, fecha: string) {
 
   const turno = await prisma.turnoCaja.findFirst({
     where:   { pdv_id: pdvId, fecha_apertura: { gte: inicio, lte: fin } },
-    include: { usuario: { select: { nombre: true } } },
+    include: { usuario: { select: { id: true, nombre: true, pago_diario: true } } },
   })
   if (!turno) return null
 
@@ -282,15 +282,19 @@ export async function getVentasSucursal(pdvId: number, fecha: string) {
   const faltantesMes = faltantesAgg.reduce((s, t) => s + Math.abs(t.diferencia_caja ?? 0), 0)
 
   return {
-    turnoId:           turno.id,
-    estado:            turno.estado,
-    vendedor:          turno.usuario?.nombre ?? 'Usuario eliminado',
+    turnoId:             turno.id,
+    usuarioId:           turno.usuario?.id ?? null,
+    estado:              turno.estado,
+    vendedor:            turno.usuario?.nombre ?? 'Usuario eliminado',
+    pagoDiario:          turno.usuario?.pago_diario ?? 28000,
     ventasPorCategoria,
     totalVentas,
-    ventaEfectivo:     turno.venta_efectivo     ?? 0,
-    efectivoDeclarado: turno.efectivo_declarado  ?? 0,
-    diferenciaCaja:    turno.diferencia_caja     ?? 0,
-    saldoInicial:      turno.saldo_inicial,
+    ventaEfectivo:       turno.venta_efectivo       ?? 0,
+    ventaTarjeta:        turno.venta_tarjeta         ?? 0,
+    ventaTransferencia:  turno.venta_transferencia   ?? 0,
+    efectivoDeclarado:   turno.efectivo_declarado    ?? 0,
+    diferenciaCaja:      turno.diferencia_caja       ?? 0,
+    saldoInicial:        turno.saldo_inicial,
     totalRetiros,
     // Métricas del mes
     metricas: {
@@ -304,6 +308,68 @@ export async function getVentasSucursal(pdvId: number, fecha: string) {
       faltantesMes,
     },
   }
+}
+
+// ─── Historial de faltantes por vendedor ─────────────────────────────────────
+
+export async function getHistorialFaltantesVendedor(usuarioId: number) {
+  const turnos = await prisma.turnoCaja.findMany({
+    where:   { usuario_id: usuarioId, estado: 'CERRADO', diferencia_caja: { lt: 0 } },
+    include: { pdv: { select: { nombre: true } } },
+    orderBy: { fecha_apertura: 'desc' },
+    take:    50,
+  })
+
+  return turnos.map(t => ({
+    turnoId:     t.id,
+    fecha:       t.fecha_apertura.toISOString(),
+    pdvNombre:   t.pdv.nombre,
+    faltante:    Math.abs(t.diferencia_caja ?? 0),
+  }))
+}
+
+// ─── Historial de turnos por sucursal ────────────────────────────────────────
+
+export async function getHistorialTurnosSucursal(
+  pdvId: number,
+  desde: string,
+  hasta: string,
+  usuarioId?: number,
+) {
+  const { inicio }  = rangoFechaChile(desde)
+  const { fin }     = rangoFechaChile(hasta)
+
+  const turnos = await prisma.turnoCaja.findMany({
+    where: {
+      pdv_id:          pdvId,
+      estado:          'CERRADO',
+      fecha_apertura:  { gte: inicio, lte: fin },
+      ...(usuarioId ? { usuario_id: usuarioId } : {}),
+    },
+    include: { usuario: { select: { id: true, nombre: true } } },
+    orderBy: { fecha_apertura: 'desc' },
+  })
+
+  const vendedoresMap = new Map<number, string>()
+  const filas = turnos.map(t => {
+    if (t.usuario) vendedoresMap.set(t.usuario.id, t.usuario.nombre)
+    return {
+      turnoId:           t.id,
+      fecha:             t.fecha_apertura.toISOString(),
+      vendedor:          t.usuario?.nombre ?? 'Usuario eliminado',
+      vendedorId:        t.usuario?.id     ?? null,
+      totalVentas:       t.total_calculado     ?? 0,
+      ventaEfectivo:     t.venta_efectivo      ?? 0,
+      ventaTarjeta:      t.venta_tarjeta       ?? 0,
+      ventaTransferencia:t.venta_transferencia ?? 0,
+      efectivoDeclarado: t.efectivo_declarado  ?? 0,
+      diferenciaCaja:    t.diferencia_caja     ?? 0,
+    }
+  })
+
+  const vendedores = [...vendedoresMap.entries()].map(([id, nombre]) => ({ id, nombre }))
+
+  return { filas, vendedores }
 }
 
 // ─── Registro diario ──────────────────────────────────────────────────────────

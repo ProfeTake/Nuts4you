@@ -3,6 +3,7 @@
 // Selecciona PDV + fecha y consulta la API real.
 
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Store,
@@ -26,6 +27,13 @@ import {
   X,
   BarChart2,
   Settings2,
+  Wallet,
+  History,
+  CreditCard,
+  ArrowLeftRight,
+  CalendarRange,
+  User,
+  TrendingDown,
 } from "lucide-react";
 
 // shadcn/ui
@@ -43,7 +51,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 // Tipos
-import type { PDVItem, ResumenSucursal } from "@/tipos/admin.tipos";
+import type { PDVItem, ResumenSucursal, FaltanteVendedor, TurnoHistorial, VendedorOpcion } from "@/tipos/admin.tipos";
 import type { Solicitud, EstadoSolicitud } from "@/tipos/pos.tipos";
 
 // API + helpers
@@ -58,7 +66,7 @@ import { Button } from "@/components/ui/button";
 interface PDVCompleto { id: number; nombre: string; tipo: string; activo: boolean }
 
 export function ControlVentasSucursal() {
-  const [tab, setTab] = useState<"control" | "gestionar">("control");
+  const [tab, setTab] = useState<"control" | "historial" | "gestionar">("control");
   const [pdvSeleccionado, setPdvSeleccionado] = useState<number | "">("");
   const [fechaSeleccionada, setFechaSeleccionada] = useState(
     new Date().toISOString().split("T")[0]
@@ -142,18 +150,24 @@ export function ControlVentasSucursal() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Control de Sucursales</h1>
           <p className="text-sm text-muted-foreground">
-            {tab === "control" ? "Resumen de ventas diarias por punto de venta" : "Administrar puntos de venta"}
+            {tab === "control" ? "Resumen de ventas diarias por punto de venta" : tab === "historial" ? "Historial de turnos por sucursal" : "Administrar puntos de venta"}
           </p>
         </div>
       </div>
 
       {/* ── Tabs ── */}
-      <div className="flex gap-1 rounded-xl bg-muted p-1 w-fit">
+      <div className="flex gap-1 rounded-xl bg-muted p-1 w-fit flex-wrap">
         <button
           onClick={() => setTab("control")}
           className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${tab === "control" ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
         >
           <BarChart2 size={16} /> Control de Ventas
+        </button>
+        <button
+          onClick={() => setTab("historial")}
+          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${tab === "historial" ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+        >
+          <CalendarRange size={16} /> Historial
         </button>
         {esAdminOSupervisor && (
           <button
@@ -166,6 +180,11 @@ export function ControlVentasSucursal() {
       </div>
 
       <Separator />
+
+      {/* ── TAB: HISTORIAL ── */}
+      {tab === "historial" && (
+        <HistorialSucursal pdvs={pdvs} cargandoPdvs={cargandoPdvs} />
+      )}
 
       {/* ── TAB: GESTIONAR SUCURSALES ── */}
       {tab === "gestionar" && (
@@ -363,93 +382,125 @@ export function ControlVentasSucursal() {
             </Card>
           )}
 
-          {/* ── Tarjeta: Cuadre de Caja ── */}
-          <Card
-            className={
-              diferenciaCaja < 0
-                ? "border-red-500/50 bg-red-500/5"
-                : diferenciaCaja === 0
-                ? "border-emerald-500/50 bg-emerald-500/5"
-                : "border-blue-500/50 bg-blue-500/5"
-            }
-          >
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-base font-semibold">
-                <Banknote className="size-5" />
-                Cuadre de Caja
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 sm:grid-cols-3">
-                {/* Venta en Efectivo (calculado) */}
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Venta Efectivo
-                  </p>
-                  <p className="text-xl font-bold tabular-nums">
-                    {formatearCLP(reporte.ventaEfectivo)}
-                  </p>
+          {/* ── Pago del turno activo (solo turno ABIERTO) ── */}
+          {reporte.estado === "ABIERTO" && (
+            <Card className="border-primary/30 bg-primary/5">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <Wallet className="size-5 text-primary" />
+                  Pago del turno activo
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Vendedor/a</p>
+                    <p className="text-base font-bold">{reporte.vendedor}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Pago diario</p>
+                    <p className="text-xl font-bold tabular-nums text-primary">{formatearCLP(reporte.pagoDiario)}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Estado turno</p>
+                    <Badge variant="outline" className="text-xs bg-emerald-500/10 text-emerald-600 border-emerald-500/30">
+                      En curso
+                    </Badge>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* ── Cuadre de Caja — solo turno CERRADO ── */}
+          {reporte.estado === "CERRADO" && (
+            <Card
+              className={
+                diferenciaCaja < 0
+                  ? "border-red-500/50 bg-red-500/5"
+                  : diferenciaCaja === 0
+                  ? "border-emerald-500/50 bg-emerald-500/5"
+                  : "border-blue-500/50 bg-blue-500/5"
+              }
+            >
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <Banknote className="size-5" />
+                  Cuadre de Caja
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Desglose de ventas */}
+                <div className="rounded-xl border bg-background overflow-hidden divide-y divide-border/60 text-sm">
+                  <FilaCuadreAdmin label="Total venta calculada" valor={formatearCLP(reporte.totalVentas)} claseValor="font-bold" />
+                  {reporte.ventaTarjeta > 0 && (
+                    <FilaCuadreAdmin
+                      icono={<CreditCard className="size-3.5 text-blue-500" />}
+                      label="Venta tarjeta"
+                      valor={formatearCLP(reporte.ventaTarjeta)}
+                      claseValor="text-blue-600"
+                    />
+                  )}
+                  {reporte.ventaTransferencia > 0 && (
+                    <FilaCuadreAdmin
+                      icono={<ArrowLeftRight className="size-3.5 text-violet-500" />}
+                      label="Venta transferencia"
+                      valor={formatearCLP(reporte.ventaTransferencia)}
+                      claseValor="text-violet-600"
+                    />
+                  )}
+                  <FilaCuadreAdmin label="Venta efectivo" valor={formatearCLP(reporte.ventaEfectivo)} />
+                  {reporte.totalRetiros > 0 && (
+                    <FilaCuadreAdmin label="+ Retiros" valor={formatearCLP(reporte.totalRetiros)} claseValor="text-orange-600" />
+                  )}
+                  <FilaCuadreAdmin label="A depositar (efectivo + retiros)" valor={formatearCLP(reporte.efectivoDeclarado + reporte.totalRetiros)} claseValor="font-bold text-primary" />
                 </div>
 
-                {/* Efectivo Declarado */}
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Efectivo Declarado
-                  </p>
-                  <p className="text-xl font-bold tabular-nums">
-                    {formatearCLP(reporte.efectivoDeclarado)}
-                  </p>
-                </div>
-
-                {/* Diferencia */}
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Diferencia
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <p
-                      className={`text-xl font-bold tabular-nums ${
-                        diferenciaCaja < 0
-                          ? "text-red-600"
-                          : diferenciaCaja === 0
-                          ? "text-emerald-600"
-                          : "text-blue-600"
-                      }`}
-                    >
-                      {diferenciaCaja >= 0 ? "+" : ""}
-                      {formatearCLP(diferenciaCaja)}
-                    </p>
-                    {diferenciaCaja < 0 ? (
-                      <ArrowDownRight className="size-5 text-red-500" />
-                    ) : diferenciaCaja === 0 ? (
-                      <CheckCircle2 className="size-5 text-emerald-500" />
-                    ) : (
-                      <TrendingUp className="size-5 text-blue-500" />
+                {/* Efectivo declarado vs esperado */}
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Efectivo declarado</p>
+                    <p className="text-xl font-bold tabular-nums">{formatearCLP(reporte.efectivoDeclarado)}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Pago vendedor/a</p>
+                    <p className="text-xl font-bold tabular-nums text-primary">{formatearCLP(reporte.pagoDiario)}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Diferencia</p>
+                    <div className="flex items-center gap-2">
+                      <p className={`text-xl font-bold tabular-nums ${diferenciaCaja < 0 ? "text-red-600" : diferenciaCaja === 0 ? "text-emerald-600" : "text-blue-600"}`}>
+                        {diferenciaCaja >= 0 ? "+" : ""}{formatearCLP(diferenciaCaja)}
+                      </p>
+                      {diferenciaCaja < 0 ? (
+                        <ArrowDownRight className="size-5 text-red-500" />
+                      ) : diferenciaCaja === 0 ? (
+                        <CheckCircle2 className="size-5 text-emerald-500" />
+                      ) : (
+                        <TrendingUp className="size-5 text-blue-500" />
+                      )}
+                    </div>
+                    {diferenciaCaja < 0 && (
+                      <Badge variant="destructive" className="mt-1 text-xs font-semibold animate-pulse">
+                        ⚠ Faltante: {formatearCLP(Math.abs(diferenciaCaja))}
+                      </Badge>
+                    )}
+                    {diferenciaCaja === 0 && (
+                      <Badge className="mt-1 bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-xs">Caja cuadrada</Badge>
+                    )}
+                    {diferenciaCaja > 0 && (
+                      <Badge className="mt-1 bg-blue-500/10 text-blue-600 border-blue-500/30 text-xs">Sobrante de caja</Badge>
                     )}
                   </div>
-
-                  {diferenciaCaja < 0 && (
-                    <Badge
-                      variant="destructive"
-                      className="mt-1 text-xs font-semibold animate-pulse"
-                    >
-                      ⚠ Faltante: {formatearCLP(Math.abs(diferenciaCaja))}
-                    </Badge>
-                  )}
-                  {diferenciaCaja === 0 && (
-                    <Badge className="mt-1 bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-xs">
-                      Caja cuadrada
-                    </Badge>
-                  )}
-                  {diferenciaCaja > 0 && (
-                    <Badge className="mt-1 bg-blue-500/10 text-blue-600 border-blue-500/30 text-xs">
-                      Sobrante de caja
-                    </Badge>
-                  )}
                 </div>
-              </div>
-            </CardContent>
-          </Card>
+
+                {/* Historial de faltantes del vendedor */}
+                {reporte.usuarioId && (
+                  <HistorialFaltantes usuarioId={reporte.usuarioId} vendedor={reporte.vendedor} />
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* ── Retiro de dinero del punto ── */}
           {esAdminOSupervisor && reporte.estado === "ABIERTO" && (
@@ -577,6 +628,396 @@ export function ControlVentasSucursal() {
       <SolicitudesPendientes queryClient={queryClient} />
 
       </> )} {/* fin tab control */}
+    </div>
+  );
+}
+
+// ─── HistorialSucursal ───────────────────────────────────────────────────────
+
+type Periodo = "dia" | "semana" | "mes" | "custom";
+
+function fechaHoy() {
+  return new Date().toISOString().split("T")[0];
+}
+
+function fechaHace(dias: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - dias);
+  return d.toISOString().split("T")[0];
+}
+
+function primerDiaMes() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function HistorialSucursal({ pdvs, cargandoPdvs }: { pdvs: PDVItem[]; cargandoPdvs: boolean }) {
+  const [pdvId,      setPdvId]      = useState<number | "">("");
+  const [periodo,    setPeriodo]    = useState<Periodo>("semana");
+  const [desde,      setDesde]      = useState(fechaHace(6));
+  const [hasta,      setHasta]      = useState(fechaHoy());
+  const [vendedorId, setVendedorId] = useState<number | "">("");
+
+  const rangoVisible = periodo === "custom";
+
+  const handlePeriodo = (p: Periodo) => {
+    setPeriodo(p);
+    const hoy = fechaHoy();
+    if (p === "dia")    { setDesde(hoy);            setHasta(hoy); }
+    if (p === "semana") { setDesde(fechaHace(6));   setHasta(hoy); }
+    if (p === "mes")    { setDesde(primerDiaMes()); setHasta(hoy); }
+  };
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["admin", "historial-turnos", pdvId, desde, hasta, vendedorId],
+    queryFn:  () => {
+      const params = new URLSearchParams({
+        pdvId:  String(pdvId),
+        desde,
+        hasta,
+        ...(vendedorId !== "" ? { usuarioId: String(vendedorId) } : {}),
+      });
+      return apiGet<{ data: { filas: TurnoHistorial[]; vendedores: VendedorOpcion[] } }>(
+        `/admin/historial-turnos?${params}`
+      ).then(r => r.data);
+    },
+    enabled: !!pdvId && !!desde && !!hasta,
+    retry: false,
+  });
+
+  const filas      = data?.filas      ?? [];
+  const vendedores = data?.vendedores ?? [];
+
+  const totalVentas   = filas.reduce((s, f) => s + f.totalVentas, 0);
+  const totalFaltante = filas.reduce((s, f) => s + (f.diferenciaCaja < 0 ? Math.abs(f.diferenciaCaja) : 0), 0);
+  const totalSobrante = filas.reduce((s, f) => s + (f.diferenciaCaja > 0 ? f.diferenciaCaja : 0), 0);
+
+  const PERIODOS: { key: Periodo; label: string }[] = [
+    { key: "dia",    label: "Hoy" },
+    { key: "semana", label: "Semana" },
+    { key: "mes",    label: "Mes" },
+    { key: "custom", label: "Personalizado" },
+  ];
+
+  return (
+    <div className="space-y-5">
+
+      {/* Filtros */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label>Sucursal</Label>
+          <Select
+            value={pdvId !== "" ? String(pdvId) : undefined}
+            onValueChange={v => { setPdvId(Number(v)); setVendedorId(""); }}
+            disabled={cargandoPdvs}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder={cargandoPdvs ? "Cargando…" : "Selecciona una sucursal"} />
+            </SelectTrigger>
+            <SelectContent>
+              {pdvs.map(p => (
+                <SelectItem key={p.id} value={String(p.id)}>{p.nombre}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Período</Label>
+          <div className="flex gap-1 rounded-lg bg-muted p-1">
+            {PERIODOS.map(p => (
+              <button
+                key={p.key}
+                onClick={() => handlePeriodo(p.key)}
+                className={`flex-1 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
+                  periodo === p.key ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Rango personalizado */}
+      {rangoVisible && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Desde</Label>
+            <div className="relative">
+              <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+              <Input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="pl-10" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Hasta</Label>
+            <div className="relative">
+              <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+              <Input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="pl-10" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filtro vendedor (solo si hay datos) */}
+      {vendedores.length > 0 && (
+        <div className="space-y-1.5">
+          <Label>Filtrar por vendedor/a</Label>
+          <Select
+            value={vendedorId !== "" ? String(vendedorId) : "todos"}
+            onValueChange={v => setVendedorId(v === "todos" ? "" : Number(v))}
+          >
+            <SelectTrigger className="w-full sm:w-64">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="todos">Todos los vendedores</SelectItem>
+              {vendedores.map(v => (
+                <SelectItem key={v.id} value={String(v.id)}>
+                  <div className="flex items-center gap-2">
+                    <User size={13} className="text-muted-foreground" />
+                    {v.nombre}
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {/* Sin sucursal */}
+      {!pdvId && (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <CalendarRange className="mb-3 size-10 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">Selecciona una sucursal para ver el historial</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Cargando */}
+      {pdvId !== "" && isLoading && (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="size-7 animate-spin text-muted-foreground" />
+        </div>
+      )}
+
+      {/* Error */}
+      {pdvId !== "" && isError && !isLoading && (
+        <Card className="border-dashed border-amber-500/40 bg-amber-500/5">
+          <CardContent className="flex flex-col items-center justify-center py-10 text-center">
+            <AlertCircle className="mb-3 size-8 text-amber-500/60" />
+            <p className="text-sm text-amber-600">No se pudo cargar el historial</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Sin turnos */}
+      {pdvId !== "" && !isLoading && !isError && filas.length === 0 && (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <History className="mb-3 size-10 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">No hay turnos cerrados en este período</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Resumen del período */}
+      {filas.length > 0 && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Card>
+              <CardContent className="px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Total ventas</p>
+                <p className="mt-1 text-xl font-bold tabular-nums">{formatearCLP(totalVentas)}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{filas.length} turno{filas.length !== 1 ? "s" : ""}</p>
+              </CardContent>
+            </Card>
+            {totalFaltante > 0 && (
+              <Card className="border-red-500/40 bg-red-500/5">
+                <CardContent className="px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-red-600">Faltantes período</p>
+                  <p className="mt-1 text-xl font-bold tabular-nums text-red-600">{formatearCLP(totalFaltante)}</p>
+                  <p className="text-[10px] text-red-500 mt-0.5">
+                    {filas.filter(f => f.diferenciaCaja < 0).length} turno{filas.filter(f => f.diferenciaCaja < 0).length !== 1 ? "s" : ""} con faltante
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+            {totalSobrante > 0 && (
+              <Card className="border-blue-500/40 bg-blue-500/5">
+                <CardContent className="px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-blue-600">Sobrantes período</p>
+                  <p className="mt-1 text-xl font-bold tabular-nums text-blue-600">{formatearCLP(totalSobrante)}</p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* Tabla de turnos */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                <History size={18} />
+                Turnos del período
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/40 text-left text-muted-foreground">
+                      <th className="px-4 py-3 font-semibold">Fecha</th>
+                      <th className="px-4 py-3 font-semibold">Vendedor/a</th>
+                      <th className="px-4 py-3 font-semibold text-right">Total ventas</th>
+                      <th className="px-4 py-3 font-semibold text-right">Tarjeta</th>
+                      <th className="px-4 py-3 font-semibold text-right">Transfer.</th>
+                      <th className="px-4 py-3 font-semibold text-right">Efectivo decl.</th>
+                      <th className="px-4 py-3 font-semibold text-right">Diferencia</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filas.map(f => {
+                      const esFaltante = f.diferenciaCaja < 0;
+                      const esSobrante = f.diferenciaCaja > 0;
+                      return (
+                        <tr key={f.turnoId} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            {new Date(f.fecha).toLocaleDateString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit" })}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1.5">
+                              <User size={13} className="text-muted-foreground shrink-0" />
+                              <span className="font-medium">{f.vendedor}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums font-semibold">
+                            {formatearCLP(f.totalVentas)}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums text-blue-600">
+                            {f.ventaTarjeta > 0 ? formatearCLP(f.ventaTarjeta) : <span className="text-muted-foreground">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums text-violet-600">
+                            {f.ventaTransferencia > 0 ? formatearCLP(f.ventaTransferencia) : <span className="text-muted-foreground">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            {formatearCLP(f.efectivoDeclarado)}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            <span className={`font-bold ${esFaltante ? "text-red-600" : esSobrante ? "text-blue-600" : "text-emerald-600"}`}>
+                              {f.diferenciaCaja >= 0 ? "+" : ""}{formatearCLP(f.diferenciaCaja)}
+                            </span>
+                            {esFaltante && (
+                              <span className="ml-1.5 text-[10px] font-bold text-red-500 bg-red-100 dark:bg-red-950/40 rounded-full px-1.5 py-0.5">
+                                <TrendingDown size={10} className="inline mr-0.5" />faltante
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 bg-muted/50 font-bold">
+                      <td colSpan={2} className="px-4 py-3 text-sm">Total período</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{formatearCLP(totalVentas)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-blue-600">
+                        {formatearCLP(filas.reduce((s, f) => s + f.ventaTarjeta, 0))}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums text-violet-600">
+                        {formatearCLP(filas.reduce((s, f) => s + f.ventaTransferencia, 0))}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        {formatearCLP(filas.reduce((s, f) => s + f.efectivoDeclarado, 0))}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        {totalFaltante > 0 && (
+                          <span className="text-red-600">−{formatearCLP(totalFaltante)}</span>
+                        )}
+                        {totalFaltante === 0 && totalSobrante === 0 && (
+                          <span className="text-emerald-600">+$0</span>
+                        )}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── FilaCuadreAdmin ─────────────────────────────────────────────────────────
+
+function FilaCuadreAdmin({
+  icono, label, valor, claseValor = "text-foreground",
+}: { icono?: ReactNode; label: string; valor: string; claseValor?: string }) {
+  return (
+    <div className="flex items-center justify-between px-3 py-2.5">
+      <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+        {icono}
+        {label}
+      </span>
+      <span className={`text-sm tabular-nums ${claseValor}`}>{valor}</span>
+    </div>
+  );
+}
+
+// ─── HistorialFaltantes ───────────────────────────────────────────────────────
+
+function HistorialFaltantes({ usuarioId, vendedor }: { usuarioId: number; vendedor: string }) {
+  const { data: faltantes = [], isLoading } = useQuery({
+    queryKey: ["admin", "faltantes-vendedor", usuarioId],
+    queryFn:  () => apiGet<{ data: FaltanteVendedor[] }>(`/admin/vendedores/${usuarioId}/faltantes`).then(r => r.data),
+  });
+
+  if (isLoading) return (
+    <div className="flex items-center gap-2 text-sm text-muted-foreground pt-2">
+      <Loader2 size={14} className="animate-spin" /> Cargando historial…
+    </div>
+  );
+
+  if (faltantes.length === 0) return null;
+
+  const totalFaltantes = faltantes.reduce((s, f) => s + f.faltante, 0);
+
+  return (
+    <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-red-200 dark:border-red-900">
+        <div className="flex items-center gap-2">
+          <History size={16} className="text-red-600" />
+          <p className="text-sm font-bold text-red-700 dark:text-red-400">
+            Historial de faltantes — {vendedor}
+          </p>
+        </div>
+        <Badge variant="destructive" className="text-xs">
+          Total: {formatearCLP(totalFaltantes)}
+        </Badge>
+      </div>
+      <div className="divide-y divide-red-200/60 dark:divide-red-900/60 max-h-48 overflow-y-auto">
+        {faltantes.map(f => (
+          <div key={f.turnoId} className="flex items-center justify-between px-4 py-2.5 text-sm">
+            <div>
+              <p className="font-medium text-foreground">{f.pdvNombre}</p>
+              <p className="text-xs text-muted-foreground">
+                {new Date(f.fecha).toLocaleDateString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit" })}
+              </p>
+            </div>
+            <span className="font-bold tabular-nums text-red-600">
+              −{formatearCLP(f.faltante)}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="px-4 py-2.5 bg-red-100/50 dark:bg-red-950/30 border-t border-red-200 dark:border-red-900">
+        <p className="text-xs text-red-700 dark:text-red-400 font-medium">
+          Estos montos se descontarán del pago final del vendedor/a.
+        </p>
+      </div>
     </div>
   );
 }

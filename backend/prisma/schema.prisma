@@ -302,6 +302,14 @@ model DetalleFactura {
   // factura_id indexado por MySQL como FK
 }
 
+// ─── Plantilla de tareas para Cierre Preventivo ──────────────────────────────
+
+model TareaChecklist {
+  id    Int    @id @default(autoincrement())
+  label String
+  orden Int    @default(0)
+}
+
 // ─── Cierre Preventivo ────────────────────────────────────────────────────────
 
 model CierrePreventivo {

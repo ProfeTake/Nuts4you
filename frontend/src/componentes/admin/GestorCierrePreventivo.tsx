@@ -4,7 +4,8 @@ import { toast } from "sonner";
 import {
   ShieldAlert, Store, ChevronDown, ChevronUp, Trash2,
   CheckSquare2, Square, ClipboardList, History,
-  BadgeDollarSign, StickyNote, Eye,
+  BadgeDollarSign, StickyNote, Eye, Plus, X, Settings2,
+  Loader2,
 } from "lucide-react";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
@@ -23,27 +24,19 @@ import { formatearCLP } from "@/lib/money";
 import type { CierrePreventivo, ChecklistItem } from "@/tipos/admin.tipos";
 import { useAuthStore } from "@/store/auth.store";
 
-// ─── Constantes ───────────────────────────────────────────────────────────────
-
-const ITEMS_CHECKLIST_BASE: string[] = [
-  "Retiro de efectivo realizado",
-  "Conteo de dinero en caja verificado",
-  "Inventario de insumos / mezclas revisado",
-  "Inventario de productos terminados revisado",
-  "Revisión de vitrina y exhibición de productos",
-  "Limpieza general del local verificada",
-  "Instrucciones o tareas dejadas al vendedor",
-]
-
-function crearChecklistInicial(): ChecklistItem[] {
-  return ITEMS_CHECKLIST_BASE.map((label) => ({ label, marcado: true }))
-}
+// ─── Tipos ────────────────────────────────────────────────────────────────────
 
 interface PDVItem {
   id:     number;
   nombre: string;
   tipo:   string;
   activo: boolean;
+}
+
+interface TareaAPI {
+  id:    number;
+  label: string;
+  orden: number;
 }
 
 // ─── Tarjeta de cierre en el historial ────────────────────────────────────────
@@ -57,10 +50,10 @@ function TarjetaCierre({
   puedeEliminar: boolean;
   onEliminar:    (id: number) => void;
 }) {
-  const [expandido, setExpandido]       = useState(false);
-  const [dlgEliminar, setDlgEliminar]   = useState(false);
-  const marcados  = cierre.checklist.filter((i) => i.marcado).length;
-  const total     = cierre.checklist.length;
+  const [expandido, setExpandido]     = useState(false);
+  const [dlgEliminar, setDlgEliminar] = useState(false);
+  const marcados = cierre.checklist.filter((i) => i.marcado).length;
+  const total    = cierre.checklist.length;
 
   const fecha = new Date(cierre.fecha);
   const fechaLabel = fecha.toLocaleDateString("es-CL", {
@@ -112,7 +105,6 @@ function TarjetaCierre({
 
       {expandido && (
         <div className="border-t px-4 py-4 space-y-4 bg-muted/20">
-          {/* Checklist */}
           <div>
             <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
               Actividades realizadas
@@ -158,7 +150,6 @@ function TarjetaCierre({
         </div>
       )}
 
-      {/* Diálogo confirmar eliminación */}
       <Dialog open={dlgEliminar} onOpenChange={setDlgEliminar}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -187,12 +178,14 @@ function TarjetaCierre({
 
 function FormCierrePreventivo({
   pdvs,
+  tareasBase,
   onGuardar,
   onCancelar,
   guardando,
 }: {
-  pdvs:      PDVItem[];
-  onGuardar: (data: {
+  pdvs:       PDVItem[];
+  tareasBase: TareaAPI[];
+  onGuardar:  (data: {
     pdvId: number;
     montoRetiro: number;
     checklist: ChecklistItem[];
@@ -202,18 +195,30 @@ function FormCierrePreventivo({
   onCancelar: () => void;
   guardando:  boolean;
 }) {
-  const [pdvId,        setPdvId]        = useState<number | null>(null);
-  const [montoRetiro,  setMontoRetiro]  = useState("");
-  const [checklist,    setChecklist]    = useState<ChecklistItem[]>(crearChecklistInicial);
+  const [pdvId,         setPdvId]         = useState<number | null>(null);
+  const [montoRetiro,   setMontoRetiro]   = useState("");
+  const [checklist,     setChecklist]     = useState<ChecklistItem[]>(() =>
+    tareasBase.map((t) => ({ label: t.label, marcado: false }))
+  );
   const [notasVendedor, setNotasVendedor] = useState("");
   const [observaciones, setObservaciones] = useState("");
+  const [nuevaTarea,    setNuevaTarea]    = useState("");
 
   const toggleItem = (i: number) =>
     setChecklist((prev) => prev.map((it, idx) => idx === i ? { ...it, marcado: !it.marcado } : it));
 
-  const marcadosCount = checklist.filter((i) => i.marcado).length;
+  const eliminarItem = (i: number) =>
+    setChecklist((prev) => prev.filter((_, idx) => idx !== i));
 
-  const valido = pdvId !== null && checklist.length > 0;
+  const agregarTarea = () => {
+    const label = nuevaTarea.trim();
+    if (!label) return;
+    setChecklist((prev) => [...prev, { label, marcado: false }]);
+    setNuevaTarea("");
+  };
+
+  const marcadosCount = checklist.filter((i) => i.marcado).length;
+  const valido = pdvId !== null;
 
   const handleSubmit = () => {
     if (!valido || !pdvId) return;
@@ -273,25 +278,65 @@ function FormCierrePreventivo({
             <ClipboardList className="size-3.5 text-muted-foreground" />
             Actividades realizadas
           </Label>
-          <span className="text-xs text-muted-foreground">{marcadosCount}/{checklist.length} completadas</span>
+          <span className="text-xs text-muted-foreground">
+            {marcadosCount}/{checklist.length} completadas
+          </span>
         </div>
-        <div className="rounded-xl border bg-muted/20 divide-y">
-          {checklist.map((item, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => toggleItem(i)}
-              className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors text-left"
-            >
-              {item.marcado
-                ? <CheckSquare2 className="size-4 shrink-0 text-emerald-500" />
-                : <Square className="size-4 shrink-0 text-muted-foreground" />
-              }
-              <span className={`text-sm ${item.marcado ? "font-medium" : "text-muted-foreground"}`}>
-                {item.label}
-              </span>
-            </button>
-          ))}
+
+        {checklist.length > 0 ? (
+          <div className="rounded-xl border bg-muted/20 divide-y">
+            {checklist.map((item, i) => (
+              <div key={i} className="flex items-center gap-2 px-3 py-2.5 hover:bg-muted/40 transition-colors group">
+                <button
+                  type="button"
+                  onClick={() => toggleItem(i)}
+                  className="flex flex-1 items-center gap-3 text-left min-w-0"
+                >
+                  {item.marcado
+                    ? <CheckSquare2 className="size-4 shrink-0 text-emerald-500" />
+                    : <Square className="size-4 shrink-0 text-muted-foreground" />
+                  }
+                  <span className={`text-sm truncate ${item.marcado ? "font-medium" : "text-muted-foreground"}`}>
+                    {item.label}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => eliminarItem(i)}
+                  className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                  title="Eliminar tarea"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed bg-muted/10 px-4 py-6 text-center text-sm text-muted-foreground">
+            Sin tareas. Agrega una abajo o configura la plantilla en la pestaña Plantilla.
+          </div>
+        )}
+
+        {/* Agregar tarea ad-hoc */}
+        <div className="flex gap-2">
+          <Input
+            placeholder="Agregar tarea a este cierre..."
+            value={nuevaTarea}
+            onChange={(e) => setNuevaTarea(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); agregarTarea(); }
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={agregarTarea}
+            disabled={!nuevaTarea.trim()}
+            title="Agregar tarea"
+          >
+            <Plus className="size-4" />
+          </Button>
         </div>
       </div>
 
@@ -339,10 +384,118 @@ function FormCierrePreventivo({
           disabled={!valido || guardando}
           className="gap-1.5"
         >
-          <ShieldAlert className="size-4" />
+          {guardando
+            ? <Loader2 className="size-4 animate-spin" />
+            : <ShieldAlert className="size-4" />}
           {guardando ? "Registrando..." : "Registrar cierre preventivo"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+// ─── Panel gestión de plantilla (solo ADMIN) ──────────────────────────────────
+
+function GestorPlantilla({ tareas, cargando }: { tareas: TareaAPI[]; cargando: boolean }) {
+  const queryClient = useQueryClient();
+  const [nueva, setNueva] = useState("");
+
+  const mutCrear = useMutation({
+    mutationFn: (label: string) =>
+      apiPost<{ data: TareaAPI }>("/cierres-preventivos/tareas", { label }),
+    onSuccess: () => {
+      toast.success("Tarea agregada a la plantilla");
+      queryClient.invalidateQueries({ queryKey: ["checklist-tareas"] });
+      setNueva("");
+    },
+    onError: (err: unknown) =>
+      toast.error(err instanceof Error ? err.message : "Error al agregar tarea"),
+  });
+
+  const mutEliminar = useMutation({
+    mutationFn: (id: number) =>
+      apiDelete<{ data: { id: number } }>(`/cierres-preventivos/tareas/${id}`),
+    onSuccess: () => {
+      toast.success("Tarea eliminada");
+      queryClient.invalidateQueries({ queryKey: ["checklist-tareas"] });
+    },
+    onError: (err: unknown) =>
+      toast.error(err instanceof Error ? err.message : "Error al eliminar tarea"),
+  });
+
+  const agregar = () => {
+    const label = nueva.trim();
+    if (!label) return;
+    mutCrear.mutate(label);
+  };
+
+  return (
+    <div className="rounded-xl border bg-card p-6 space-y-5">
+      <div>
+        <p className="text-sm font-semibold">Plantilla de tareas</p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Estas tareas aparecen por defecto (sin marcar) al registrar un nuevo cierre preventivo.
+          Puedes agregar o eliminar según las necesidades operativas.
+        </p>
+      </div>
+
+      {/* Agregar nueva tarea */}
+      <div className="flex gap-2">
+        <Input
+          placeholder="Descripción de la nueva tarea..."
+          value={nueva}
+          onChange={(e) => setNueva(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); agregar(); }
+          }}
+        />
+        <Button
+          onClick={agregar}
+          disabled={!nueva.trim() || mutCrear.isPending}
+          className="gap-1.5 shrink-0"
+        >
+          {mutCrear.isPending
+            ? <Loader2 className="size-4 animate-spin" />
+            : <Plus className="size-4" />}
+          Agregar tarea
+        </Button>
+      </div>
+
+      {/* Lista de tareas */}
+      {cargando ? (
+        <div className="flex items-center justify-center py-8 gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          Cargando tareas...
+        </div>
+      ) : tareas.length === 0 ? (
+        <div className="rounded-xl border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+          No hay tareas configuradas. Agrega la primera tarea arriba.
+        </div>
+      ) : (
+        <div className="rounded-xl border divide-y">
+          {tareas.map((t, i) => (
+            <div key={t.id} className="flex items-center gap-3 px-4 py-3 group">
+              <div className="flex size-6 items-center justify-center rounded-full bg-muted text-[11px] font-bold text-muted-foreground shrink-0">
+                {i + 1}
+              </div>
+              <span className="flex-1 text-sm">{t.label}</span>
+              <Button
+                size="icon" variant="ghost"
+                className="size-7 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive hover:bg-destructive/10"
+                onClick={() => mutEliminar.mutate(t.id)}
+                disabled={mutEliminar.isPending}
+                title="Eliminar tarea"
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-[11px] text-muted-foreground">
+        {tareas.length} tarea{tareas.length !== 1 ? "s" : ""} en la plantilla
+      </p>
     </div>
   );
 }
@@ -354,8 +507,8 @@ export function GestorCierrePreventivo() {
   const { usuario } = useAuthStore();
   const esAdmin = usuario?.rol === "ADMIN";
 
-  const [tab,        setTab]        = useState<"nuevo" | "historial">("nuevo");
-  const [filtroPdv,  setFiltroPdv]  = useState("TODOS");
+  const [tab,         setTab]         = useState<"nuevo" | "historial" | "plantilla">("nuevo");
+  const [filtroPdv,   setFiltroPdv]   = useState("TODOS");
   const [filtroDesde, setFiltroDesde] = useState("");
   const [filtroHasta, setFiltroHasta] = useState("");
 
@@ -369,12 +522,18 @@ export function GestorCierrePreventivo() {
       ),
   });
 
+  const { data: tareas = [], isLoading: cargandoTareas } = useQuery({
+    queryKey: ["checklist-tareas"],
+    queryFn:  () =>
+      apiGet<{ data: TareaAPI[] }>("/cierres-preventivos/tareas").then((r) => r.data),
+  });
+
   const queryParams = new URLSearchParams();
   if (filtroPdv !== "TODOS") queryParams.set("pdvId", filtroPdv);
   if (filtroDesde)            queryParams.set("desde", filtroDesde);
   if (filtroHasta)            queryParams.set("hasta", filtroHasta);
 
-  const { data: cierres = [], isLoading } = useQuery({
+  const { data: cierres = [], isLoading: cargandoCierres } = useQuery({
     queryKey: ["cierres-preventivos", filtroPdv, filtroDesde, filtroHasta],
     queryFn:  () =>
       apiGet<{ data: CierrePreventivo[] }>(
@@ -429,16 +588,14 @@ export function GestorCierrePreventivo() {
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <ShieldAlert className="size-6 text-amber-500" />
-            Cierre Preventivo
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Registro de visitas a sucursales con cierre, retiro e inventario
-          </p>
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+          <ShieldAlert className="size-6 text-amber-500" />
+          Cierre Preventivo
+        </h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Registro de visitas a sucursales con cierre, retiro e inventario
+        </p>
       </div>
 
       <Separator />
@@ -448,13 +605,12 @@ export function GestorCierrePreventivo() {
         <p className="font-semibold">¿Qué es un cierre preventivo?</p>
         <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
           Es un cierre temporal del PDV realizado por un administrador o supervisor para realizar retiros
-          de efectivo, revisar inventario y dejar instrucciones al vendedor. Tras el cierre, el vendedor
-          deberá reingresar el inventario y el saldo inicial de caja al reabrir.
+          de efectivo, revisar inventario y dejar instrucciones al vendedor.
         </p>
       </div>
 
       {/* Tabs */}
-      <Tabs value={tab} onValueChange={(v) => setTab(v as "nuevo" | "historial")}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
         <TabsList className="mb-4">
           <TabsTrigger value="nuevo" className="gap-2">
             <ShieldAlert className="size-4" />
@@ -464,13 +620,21 @@ export function GestorCierrePreventivo() {
             <History className="size-4" />
             Historial
           </TabsTrigger>
+          {esAdmin && (
+            <TabsTrigger value="plantilla" className="gap-2">
+              <Settings2 className="size-4" />
+              Plantilla
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* ── Tab: Nuevo cierre ── */}
         <TabsContent value="nuevo">
           <div className="rounded-xl border bg-card p-6">
             <FormCierrePreventivo
+              key={tareas.map((t) => t.id).join(",")}
               pdvs={pdvs}
+              tareasBase={tareas}
               onGuardar={handleGuardar}
               onCancelar={() => setTab("historial")}
               guardando={mutRegistrar.isPending}
@@ -480,7 +644,6 @@ export function GestorCierrePreventivo() {
 
         {/* ── Tab: Historial ── */}
         <TabsContent value="historial">
-          {/* Filtros */}
           <div className="flex flex-wrap gap-3 mb-4">
             <Select value={filtroPdv} onValueChange={setFiltroPdv}>
               <SelectTrigger className="w-48">
@@ -515,8 +678,7 @@ export function GestorCierrePreventivo() {
             </div>
             {(filtroPdv !== "TODOS" || filtroDesde || filtroHasta) && (
               <Button
-                variant="ghost"
-                size="sm"
+                variant="ghost" size="sm"
                 onClick={() => { setFiltroPdv("TODOS"); setFiltroDesde(""); setFiltroHasta(""); }}
               >
                 Limpiar filtros
@@ -524,18 +686,21 @@ export function GestorCierrePreventivo() {
             )}
           </div>
 
-          {isLoading && (
-            <div className="text-center py-12 text-muted-foreground text-sm">Cargando historial...</div>
+          {cargandoCierres && (
+            <div className="flex items-center justify-center py-12 gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Cargando historial...
+            </div>
           )}
 
-          {!isLoading && cierres.length === 0 && (
+          {!cargandoCierres && cierres.length === 0 && (
             <div className="text-center py-12 space-y-2">
               <ShieldAlert className="size-10 mx-auto text-muted-foreground/40" />
               <p className="text-muted-foreground text-sm">No hay cierres preventivos registrados</p>
             </div>
           )}
 
-          {!isLoading && cierres.length > 0 && (
+          {!cargandoCierres && cierres.length > 0 && (
             <div className="space-y-3">
               {cierres.map((c) => (
                 <TarjetaCierre
@@ -548,6 +713,13 @@ export function GestorCierrePreventivo() {
             </div>
           )}
         </TabsContent>
+
+        {/* ── Tab: Plantilla (solo ADMIN) ── */}
+        {esAdmin && (
+          <TabsContent value="plantilla">
+            <GestorPlantilla tareas={tareas} cargando={cargandoTareas} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

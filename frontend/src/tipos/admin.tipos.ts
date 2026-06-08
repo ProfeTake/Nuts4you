@@ -140,18 +140,47 @@ export interface MetricasMes {
   faltantesMes: number;
 }
 
+export interface TurnoHistorial {
+  turnoId:            number;
+  fecha:              string;
+  vendedor:           string;
+  vendedorId:         number | null;
+  totalVentas:        number;
+  ventaEfectivo:      number;
+  ventaTarjeta:       number;
+  ventaTransferencia: number;
+  efectivoDeclarado:  number;
+  diferenciaCaja:     number;
+}
+
+export interface VendedorOpcion {
+  id:     number;
+  nombre: string;
+}
+
+export interface FaltanteVendedor {
+  turnoId:   number;
+  fecha:     string;
+  pdvNombre: string;
+  faltante:  number;
+}
+
 export interface ResumenSucursal {
-  turnoId: number;
-  estado: string;
-  vendedor: string;
+  turnoId:            number;
+  usuarioId:          number | null;
+  estado:             string;
+  vendedor:           string;
+  pagoDiario:         number;
   ventasPorCategoria: Record<string, number>;
-  totalVentas: number;
-  ventaEfectivo: number;
-  efectivoDeclarado: number;
-  diferenciaCaja: number;
-  saldoInicial: number;
-  totalRetiros: number;
-  metricas: MetricasMes;
+  totalVentas:        number;
+  ventaEfectivo:      number;
+  ventaTarjeta:       number;
+  ventaTransferencia: number;
+  efectivoDeclarado:  number;
+  diferenciaCaja:     number;
+  saldoInicial:       number;
+  totalRetiros:       number;
+  metricas:           MetricasMes;
 }
 
 // ─── Depósitos (Finanzas) ───

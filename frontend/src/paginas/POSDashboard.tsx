@@ -339,7 +339,9 @@ export default function POSDashboard() {
       {/* ── BARRA INFERIOR FIJA ── */}
       <div className="shrink-0 border-t bg-background px-4 py-3 flex items-center gap-3">
         <div className="flex-1 min-w-0">
-          {estTotal > 0 ? (
+          {!puedeEliminar && estTotal > 0 ? (
+            <p className="text-sm text-muted-foreground">Stock contado · listo para cuadrar</p>
+          ) : puedeEliminar && estTotal > 0 ? (
             <>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Total venta</p>
               <p className="text-xl font-black tabular-nums text-emerald-600">{formatearCLP(estTotal)}</p>
@@ -373,7 +375,7 @@ export default function POSDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-bold">Cuadre de Caja</h2>
-                  {estTotal > 0 && (
+                  {puedeEliminar && estTotal > 0 && (
                     <p className="text-xs text-muted-foreground mt-0.5">Venta calculada: {formatearCLP(estTotal)}</p>
                   )}
                 </div>
@@ -519,44 +521,46 @@ export default function POSDashboard() {
                 )}
               </div>
 
-              {/* Cuadre en tiempo real */}
-              <div className="rounded-2xl border-2 bg-card overflow-hidden divide-y">
-                <FilaCuadre label="Total venta"        valor={formatearCLP(estTotal)} />
-                {tarjetaNum > 0        && <FilaCuadre label="− Tarjeta"        valor={`-${formatearCLP(tarjetaNum)}`}       claseValor="text-blue-600" />}
-                {transferenciaNum > 0  && <FilaCuadre label="− Transferencia"  valor={`-${formatearCLP(transferenciaNum)}`} claseValor="text-violet-600" />}
-                {totalGastosLibres > 0 && <FilaCuadre label="− Gastos"         valor={`-${formatearCLP(totalGastosLibres)}`} claseValor="text-red-600" />}
-                {totalRetiros > 0      && <FilaCuadre label="− Retiros"        valor={`-${formatearCLP(totalRetiros)}`}      claseValor="text-orange-600" />}
-                {totalIngresos > 0     && <FilaCuadre label="+ Ingresos / Apertura" valor={`+${formatearCLP(totalIngresos)}`} claseValor="text-emerald-600" />}
-                <div className="flex items-center justify-between px-4 py-3 bg-muted/40">
-                  <span className="text-sm font-bold">Esperado en caja</span>
-                  <span className={`font-extrabold tabular-nums ${esperadoCaja >= 0 ? "text-foreground" : "text-destructive"}`}>{formatearCLP(esperadoCaja)}</span>
-                </div>
-                {efectivoNum > 0 && (
-                  <>
-                    <FilaCuadre label="Efectivo contado" valor={formatearCLP(efectivoNum)} claseValor="text-emerald-600" />
-                    <div className={`flex items-center justify-between px-4 py-3 ${hayFaltante ? "bg-red-50 dark:bg-red-950/20" : "bg-emerald-50 dark:bg-emerald-950/20"}`}>
-                      <span className={`text-sm font-bold ${hayFaltante ? "text-red-700 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`}>
-                        {hayFaltante ? "Faltante" : "Sobrante"}
-                      </span>
-                      <span className={`text-lg font-extrabold tabular-nums ${hayFaltante ? "text-red-700 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`}>
-                        {diferencia! >= 0 ? "+" : ""}{formatearCLP(diferencia!)}
-                      </span>
-                    </div>
-                    {aDepositar !== null && (
-                      <div className="flex items-center justify-between px-4 py-3 bg-primary/5">
-                        <div>
-                          <p className="text-sm font-bold text-foreground">A depositar</p>
-                          <p className="text-[10px] text-muted-foreground">Efectivo + Retiros</p>
-                        </div>
-                        <span className="text-lg font-extrabold tabular-nums text-primary">{formatearCLP(aDepositar)}</span>
+              {/* Cuadre en tiempo real — solo visible para ADMIN/SUPERVISOR */}
+              {puedeEliminar && (
+                <div className="rounded-2xl border-2 bg-card overflow-hidden divide-y">
+                  <FilaCuadre label="Total venta"        valor={formatearCLP(estTotal)} />
+                  {tarjetaNum > 0        && <FilaCuadre label="− Tarjeta"        valor={`-${formatearCLP(tarjetaNum)}`}       claseValor="text-blue-600" />}
+                  {transferenciaNum > 0  && <FilaCuadre label="− Transferencia"  valor={`-${formatearCLP(transferenciaNum)}`} claseValor="text-violet-600" />}
+                  {totalGastosLibres > 0 && <FilaCuadre label="− Gastos"         valor={`-${formatearCLP(totalGastosLibres)}`} claseValor="text-red-600" />}
+                  {totalRetiros > 0      && <FilaCuadre label="− Retiros"        valor={`-${formatearCLP(totalRetiros)}`}      claseValor="text-orange-600" />}
+                  {totalIngresos > 0     && <FilaCuadre label="+ Ingresos / Apertura" valor={`+${formatearCLP(totalIngresos)}`} claseValor="text-emerald-600" />}
+                  <div className="flex items-center justify-between px-4 py-3 bg-muted/40">
+                    <span className="text-sm font-bold">Esperado en caja</span>
+                    <span className={`font-extrabold tabular-nums ${esperadoCaja >= 0 ? "text-foreground" : "text-destructive"}`}>{formatearCLP(esperadoCaja)}</span>
+                  </div>
+                  {efectivoNum > 0 && (
+                    <>
+                      <FilaCuadre label="Efectivo contado" valor={formatearCLP(efectivoNum)} claseValor="text-emerald-600" />
+                      <div className={`flex items-center justify-between px-4 py-3 ${hayFaltante ? "bg-red-50 dark:bg-red-950/20" : "bg-emerald-50 dark:bg-emerald-950/20"}`}>
+                        <span className={`text-sm font-bold ${hayFaltante ? "text-red-700 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`}>
+                          {hayFaltante ? "Faltante" : "Sobrante"}
+                        </span>
+                        <span className={`text-lg font-extrabold tabular-nums ${hayFaltante ? "text-red-700 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`}>
+                          {diferencia! >= 0 ? "+" : ""}{formatearCLP(diferencia!)}
+                        </span>
                       </div>
-                    )}
-                  </>
-                )}
-              </div>
+                      {aDepositar !== null && (
+                        <div className="flex items-center justify-between px-4 py-3 bg-primary/5">
+                          <div>
+                            <p className="text-sm font-bold text-foreground">A depositar</p>
+                            <p className="text-[10px] text-muted-foreground">Efectivo + Retiros</p>
+                          </div>
+                          <span className="text-lg font-extrabold tabular-nums text-primary">{formatearCLP(aDepositar)}</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
-              {/* Alerta faltante */}
-              {confirmando && hayFaltante && (
+              {/* Alerta faltante — solo para ADMIN/SUPERVISOR */}
+              {puedeEliminar && confirmando && hayFaltante && (
                 <div className="rounded-2xl border-2 border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/20 p-4 space-y-3">
                   <div className="flex items-start gap-3">
                     <AlertTriangle size={20} className="text-red-600 shrink-0 mt-0.5" />
@@ -587,15 +591,15 @@ export default function POSDashboard() {
               <button
                 onClick={() => {
                   if (efectivoNum === 0) { toast.warning("Ingresa el efectivo en caja antes de cerrar"); return; }
-                  if (hayFaltante && !confirmando) { setConfirmando(true); return; }
-                  if (!hayFaltante) ejecutarCierre();
+                  if (puedeEliminar && hayFaltante && !confirmando) { setConfirmando(true); return; }
+                  ejecutarCierre();
                 }}
                 disabled={efectivoNum === 0}
                 className={`w-full h-13 py-3.5 rounded-2xl font-bold text-sm text-white transition-colors disabled:opacity-40 active:scale-[.98] ${
-                  hayFaltante && confirmando ? "bg-red-600 hover:bg-red-700" : hayFaltante ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"
+                  puedeEliminar && hayFaltante && confirmando ? "bg-red-600 hover:bg-red-700" : puedeEliminar && hayFaltante ? "bg-red-500 hover:bg-red-600" : "bg-primary hover:bg-primary/90"
                 }`}
               >
-                {efectivoNum === 0 ? "Ingresa el efectivo para cerrar" : hayFaltante ? "Cerrar con faltante →" : "Cerrar Turno"}
+                {efectivoNum === 0 ? "Ingresa el efectivo para cerrar" : puedeEliminar && hayFaltante ? "Cerrar con faltante →" : "Cerrar Turno"}
               </button>
             </div>
           </div>
@@ -790,10 +794,7 @@ function StockSection({ titulo, colorDot, ids, expandido, onToggle, disponible, 
                     <p className={`text-[10px] font-semibold uppercase mt-1 ${sobrestock ? "text-red-600" : vend !== null ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
                       {sobrestock ? "error" : "vendidos"}
                     </p>
-                    {!sobrestock && vend !== null && precio > 0 && (
-                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400 tabular-nums mt-0.5 font-medium">{formatearCLP(vend * precio)}</p>
-                    )}
-                  </div>
+                    </div>
                 </div>
               </div>
             );

@@ -7,6 +7,9 @@ import {
   getCierresPreventivos,
   getCierresHoy,
   eliminarCierrePreventivo,
+  getTareasChecklist,
+  crearTareaChecklist,
+  eliminarTareaChecklist,
 } from '../servicios/cierrePreventivo.servicio'
 
 const router = Router()
@@ -52,6 +55,49 @@ router.post('/',
     try {
       const data = await registrarCierrePreventivo(req.usuario.id, parsed.data)
       res.status(201).json({ data })
+    } catch (error) {
+      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
+      next(error)
+    }
+  }
+)
+
+/** GET /api/cierres-preventivos/tareas — Lista de tareas de la plantilla */
+router.get('/tareas',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR'),
+  async (_req, res, next) => {
+    try {
+      const data = await getTareasChecklist()
+      res.json({ data })
+    } catch (error) { next(error) }
+  }
+)
+
+/** POST /api/cierres-preventivos/tareas — Crear tarea en la plantilla (solo ADMIN) */
+router.post('/tareas',
+  autenticar,
+  autorizar('ADMIN'),
+  async (req, res, next) => {
+    const label = String(req.body.label ?? '').trim()
+    if (!label) { res.status(400).json({ error: 'La descripción de la tarea es requerida' }); return }
+    try {
+      const data = await crearTareaChecklist(label)
+      res.status(201).json({ data })
+    } catch (error) { next(error) }
+  }
+)
+
+/** DELETE /api/cierres-preventivos/tareas/:id — Eliminar tarea (solo ADMIN) */
+router.delete('/tareas/:id',
+  autenticar,
+  autorizar('ADMIN'),
+  async (req, res, next) => {
+    const id = parseInt(req.params.id as string)
+    if (isNaN(id)) { res.status(400).json({ error: 'ID inválido' }); return }
+    try {
+      const data = await eliminarTareaChecklist(id)
+      res.json({ data })
     } catch (error) {
       if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)

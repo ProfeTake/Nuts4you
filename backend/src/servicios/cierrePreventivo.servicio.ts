@@ -101,3 +101,22 @@ export async function eliminarCierrePreventivo(id: number) {
   await prisma.cierrePreventivo.delete({ where: { id } })
   return { mensaje: 'Cierre preventivo eliminado', id }
 }
+
+// ─── Plantilla de tareas ──────────────────────────────────────────────────────
+
+export async function getTareasChecklist() {
+  return prisma.tareaChecklist.findMany({ orderBy: { orden: 'asc' } })
+}
+
+export async function crearTareaChecklist(label: string) {
+  const ultima = await prisma.tareaChecklist.findFirst({ orderBy: { orden: 'desc' } })
+  return prisma.tareaChecklist.create({
+    data: { label: label.trim(), orden: (ultima?.orden ?? -1) + 1 },
+  })
+}
+
+export async function eliminarTareaChecklist(id: number) {
+  await prisma.tareaChecklist.findUniqueOrThrow({ where: { id } })
+  await prisma.tareaChecklist.delete({ where: { id } })
+  return { id }
+}

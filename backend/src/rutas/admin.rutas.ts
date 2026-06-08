@@ -5,6 +5,7 @@ import { autorizar } from '../middlewares/autorizar'
 import {
   getResumenDiario, getVentasSucursal, getPDVs,
   crearPDV, editarPDV, toggleEstadoPDV, eliminarPDV,
+  getHistorialFaltantesVendedor, getHistorialTurnosSucursal,
 } from '../servicios/admin.servicio'
 import { guardarRegistroDiario, getRegistroDiario } from '../servicios/reporte.servicio'
 
@@ -150,6 +151,39 @@ router.get('/ventas-sucursal',
     } catch (error) {
       next(error)
     }
+  }
+)
+
+/** GET /api/admin/historial-turnos?pdvId=X&desde=Y&hasta=Z&usuarioId=W */
+router.get('/historial-turnos',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR'),
+  async (req, res, next) => {
+    const pdvId     = parseInt(req.query.pdvId as string)
+    const desde     = typeof req.query.desde === 'string' ? req.query.desde : ''
+    const hasta     = typeof req.query.hasta === 'string' ? req.query.hasta : ''
+    const usuarioId = req.query.usuarioId ? parseInt(req.query.usuarioId as string) : undefined
+    if (isNaN(pdvId) || !desde || !hasta) {
+      res.status(400).json({ error: 'Se requieren pdvId, desde y hasta' }); return
+    }
+    try {
+      const data = await getHistorialTurnosSucursal(pdvId, desde, hasta, usuarioId)
+      res.json({ data })
+    } catch (error) { next(error) }
+  }
+)
+
+/** GET /api/admin/vendedores/:id/faltantes */
+router.get('/vendedores/:id/faltantes',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR'),
+  async (req, res, next) => {
+    const id = parseInt(req.params.id as string)
+    if (isNaN(id)) { res.status(400).json({ error: 'ID inválido' }); return }
+    try {
+      const data = await getHistorialFaltantesVendedor(id)
+      res.json({ data })
+    } catch (error) { next(error) }
   }
 )
 
