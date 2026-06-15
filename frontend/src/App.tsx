@@ -27,6 +27,7 @@ import { ErrorBoundary } from "@/componentes/layout/ErrorBoundary";
 
 // Hooks y tipos
 import { useSesionPOS } from "@/hooks/useSesionPOS";
+import { useTituloPagina } from "@/hooks/useTituloPagina";
 import type { UsuarioSesion, PDVActivo } from "@/tipos/pos.tipos";
 
 // ─── Layout POS con BarraLateral ────────────────────────────────────────────
@@ -143,6 +144,9 @@ function SinPDVAsignado({ nombre, onCerrarSesion }: {
 function App() {
   const { estado, iniciarSesion, cerrarSesion } = useAuth();
   const [modoPos, setModoPos] = useState<PDVActivo | null>(null);
+
+  // Sincroniza el título de la pestaña con la sección/menú activo
+  useTituloPagina();
 
   // No autenticado → login
   if (!estado.autenticado || !estado.usuario) {
