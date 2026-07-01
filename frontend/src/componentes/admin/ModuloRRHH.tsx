@@ -294,7 +294,7 @@ export function ModuloRRHH() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Personal y Remuneraciones</h1>
         <p className="text-sm text-muted-foreground">
-          Gestión de personal de ventas, historial de turnos y liquidaciones del mes
+          Gestión de personal de ventas, historial de turnos y pagos del mes
         </p>
       </div>
 
@@ -334,7 +334,7 @@ export function ModuloRRHH() {
             </TabsTrigger>
             <TabsTrigger value="liquidaciones" className="shrink-0 !h-10 px-4 gap-2 min-w-max text-sm">
               <Banknote className="size-4" />
-              Liquidaciones
+              Pagos
             </TabsTrigger>
             <TabsTrigger value="horarios" className="shrink-0 !h-10 px-4 gap-2 min-w-max text-sm">
               <Calendar className="size-4" />
@@ -585,7 +585,7 @@ export function ModuloRRHH() {
           {cargandoLiq ? (
             <div className="flex items-center justify-center py-16 gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
-              Calculando liquidaciones…
+              Calculando pagos…
             </div>
           ) : liquidaciones.length === 0 ? (
             <EmptyState
