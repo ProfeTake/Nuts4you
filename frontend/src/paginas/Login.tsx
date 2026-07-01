@@ -1,10 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Página: Login
 // ─────────────────────────────────────────────────────────────────────────────
-// Pantalla de inicio de sesión. Valida credenciales localmente (mock).
-// Al autenticarse correctamente registra la hora de ingreso al PDV.
-// TODO: Conectar con POST /api/auth/login del backend.
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -16,7 +12,6 @@ import {
   CardContent,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import { User, Lock, Eye, EyeOff, AlertCircle } from "lucide-react";
 
 import { autoFormatRUT } from "@/lib/rut";
@@ -189,28 +184,6 @@ export default function Login({ onLogin, errorExterno }: LoginProps) {
                 )}
               </Button>
             </form>
-
-            {/* Hint de credenciales de prueba */}
-            <div className="mt-5">
-              <Separator className="mb-4" />
-              <p className="mb-2 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Credenciales de prueba
-              </p>
-              <div className="space-y-1.5 rounded-lg bg-muted/50 p-3 font-mono text-xs text-muted-foreground">
-                <p>
-                  <span className="font-semibold">Carlos:</span>{" "}
-                  12345678-9 / 1234
-                </p>
-                <p>
-                  <span className="font-semibold">Ana:</span>{" "}
-                  98765432-1 / 1234
-                </p>
-                <p>
-                  <span className="font-semibold">Admin:</span>{" "}
-                  11111111-1 / admin
-                </p>
-              </div>
-            </div>
           </CardContent>
         </Card>
 
