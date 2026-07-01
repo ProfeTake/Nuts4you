@@ -23,6 +23,7 @@ model Usuario {
   password_hash String
   activo        Boolean     @default(true)
   pago_diario   Int         @default(28000)
+  es_demo       Boolean     @default(false) // cuenta de demostración: solo lectura, ver middlewares/autenticar.ts
   rol           Rol         @relation(fields: [rol_id], references: [id])
   pdv           PDV?        @relation(fields: [pdv_id], references: [id])
   turnos              TurnoCaja[]

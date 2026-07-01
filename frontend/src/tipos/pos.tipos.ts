@@ -11,6 +11,7 @@ export interface UsuarioSesion {
   rut: string;
   nombre: string;
   rol: RolUsuario;
+  esDemo: boolean;
 }
 
 export interface PDVActivo {

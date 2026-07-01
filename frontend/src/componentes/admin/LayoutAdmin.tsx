@@ -142,24 +142,33 @@ export function LayoutAdmin({ onCerrarSesion, onEntrarModoPos, children }: Admin
 
       <Separator />
 
-      {/* Operar en sucursal */}
-      <div className="px-3 py-3">
-        <button
-          onClick={() => { setSelectorPosAbierto(true); cerrarMenu(); }}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 hover:bg-emerald-100 dark:hover:bg-emerald-950/50 transition-colors"
-        >
-          <ShoppingBag className="size-5 shrink-0" />
-          Operar en sucursal
-          <ChevronRight className="size-4 ml-auto" />
-        </button>
-      </div>
+      {/* Operar en sucursal — no disponible en modo demo (el POS no está simulado) */}
+      {!usuario?.esDemo && (
+        <div className="px-3 py-3">
+          <button
+            onClick={() => { setSelectorPosAbierto(true); cerrarMenu(); }}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 hover:bg-emerald-100 dark:hover:bg-emerald-950/50 transition-colors"
+          >
+            <ShoppingBag className="size-5 shrink-0" />
+            Operar en sucursal
+            <ChevronRight className="size-4 ml-auto" />
+          </button>
+        </div>
+      )}
 
       <Separator />
 
       {/* Footer del sidebar */}
       <div className="p-4">
         <div className="mb-3 rounded-lg bg-muted/50 px-3 py-2.5">
-          <p className="text-xs font-semibold">{usuario?.nombre ?? "Usuario"}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-semibold">{usuario?.nombre ?? "Usuario"}</p>
+            {usuario?.esDemo && (
+              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
+                MODO DEMO
+              </span>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground">{usuario?.rol ?? ""}</p>
         </div>
         <Button

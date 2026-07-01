@@ -18,14 +18,14 @@ interface PDVResponse {
 interface LoginResponse {
   data: {
     token: string;
-    usuario: { id: number; rut: string; nombre: string; rol: string };
+    usuario: { id: number; rut: string; nombre: string; rol: string; esDemo: boolean };
     pdv: PDVResponse | null;
   };
 }
 
 interface MeResponse {
   data: {
-    id: number; rut: string; nombre: string; rol: string;
+    id: number; rut: string; nombre: string; rol: string; esDemo: boolean;
     pdv: PDVResponse | null;
   };
 }
@@ -54,6 +54,8 @@ export const useAuthStore = create<AuthState>()((set) => ({
       const { token, usuario, pdv } = res.data;
 
       localStorage.setItem("token", token);
+      if (usuario.esDemo) localStorage.setItem("esDemo", "1");
+      else localStorage.removeItem("esDemo");
 
       set({
         autenticado: true,
@@ -62,6 +64,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
           rut:    usuario.rut,
           nombre: usuario.nombre,
           rol:    usuario.rol as RolUsuario,
+          esDemo: usuario.esDemo,
         },
         pdv: pdv
           ? { id: pdv.id, nombre: pdv.nombre, tipo: pdv.tipo as TipoPDV, activo: pdv.activo }
@@ -79,6 +82,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
 
   cerrarSesion: () => {
     localStorage.removeItem("token");
+    localStorage.removeItem("esDemo");
     set({
       autenticado: false,
       usuario:     null,
@@ -96,10 +100,14 @@ export const useAuthStore = create<AuthState>()((set) => ({
     set({ inicializando: true });
     try {
       const res = await apiGet<MeResponse>("/auth/me");
-      const { id, rut, nombre, rol, pdv } = res.data;
+      const { id, rut, nombre, rol, esDemo, pdv } = res.data;
+
+      if (esDemo) localStorage.setItem("esDemo", "1");
+      else localStorage.removeItem("esDemo");
+
       set({
         autenticado: true,
-        usuario: { id, rut, nombre, rol: rol as RolUsuario },
+        usuario: { id, rut, nombre, rol: rol as RolUsuario, esDemo },
         pdv: pdv ? { id: pdv.id, nombre: pdv.nombre, tipo: pdv.tipo as TipoPDV, activo: pdv.activo } : null,
         horaIngreso: new Date().toISOString(),
         error: null,
@@ -107,6 +115,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     } catch {
       // Token inválido o expirado — limpiar
       localStorage.removeItem("token");
+      localStorage.removeItem("esDemo");
     } finally {
       set({ inicializando: false });
     }

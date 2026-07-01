@@ -3,6 +3,8 @@
  * Base URL se resuelve desde VITE_API_URL o el proxy de Vite.
  */
 
+import { esRutaDemo, resolverFixtureDemo } from './demoFixtures'
+
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
 
 interface ApiOptions extends Omit<RequestInit, 'body'> {
@@ -10,7 +12,16 @@ interface ApiOptions extends Omit<RequestInit, 'body'> {
 }
 
 export async function api<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
-  const { body, headers: customHeaders, ...rest } = options
+  const { body, headers: customHeaders, method, ...rest } = options
+  const metodo = (method ?? 'GET').toUpperCase()
+
+  // Modo demo: los datos son ficticios y viven solo en memoria del navegador,
+  // nunca tocan el backend real (ver lib/demoFixtures.ts).
+  if (localStorage.getItem('esDemo') === '1' && esRutaDemo(endpoint)) {
+    const fixture = resolverFixtureDemo(metodo, endpoint, body)
+    if (fixture) return fixture as Promise<T>
+    throw new Error('No disponible en modo demo')
+  }
 
   // TODO: Obtener token del store de auth cuando se implemente
   const token = localStorage.getItem('token')
@@ -25,6 +36,7 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
   }
 
   const response = await fetch(`${BASE_URL}/api${endpoint}`, {
+    method: metodo,
     headers,
     body: body ? JSON.stringify(body) : undefined,
     ...rest,

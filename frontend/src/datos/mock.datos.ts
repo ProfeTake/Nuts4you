@@ -5,45 +5,7 @@ import type {
   Categoria,
   Producto,
   ItemInventarioInicial,
-  UsuarioSesion,
-  PDVActivo,
 } from "@/tipos/pos.tipos";
-
-// ─── Credenciales de acceso mock ─────────────────────────────────────────────
-
-export interface CredencialMock {
-  rut: string;
-  passwordHash: string;
-  usuario: UsuarioSesion;
-  pdv: PDVActivo;
-}
-
-export const credencialesMock: CredencialMock[] = [
-  {
-    rut: "12345678-9",
-    passwordHash: "1234",
-    usuario: { id: 1, rut: "12345678-9", nombre: "Carlos Muñoz",   rol: "VENDEDOR" },
-    pdv:     { id: 1, nombre: "Mall Patio",             tipo: "PUNTO_VENTA", activo: true },
-  },
-  {
-    rut: "98765432-1",
-    passwordHash: "1234",
-    usuario: { id: 2, rut: "98765432-1", nombre: "Ana Torres",     rol: "VENDEDOR" },
-    pdv:     { id: 2, nombre: "Paseo Independencia",    tipo: "PUNTO_VENTA", activo: true },
-  },
-  {
-    rut: "11111111-1",
-    passwordHash: "admin",
-    usuario: { id: 3, rut: "11111111-1", nombre: "Martín Reyes",   rol: "ADMIN" },
-    pdv:     { id: 1, nombre: "Mall Patio",             tipo: "PUNTO_VENTA", activo: true },
-  },
-  {
-    rut: "22222222-2",
-    passwordHash: "1234",
-    usuario: { id: 4, rut: "22222222-2", nombre: "Sthefany Reyes", rol: "SUPERVISOR" },
-    pdv:     { id: 1, nombre: "Mall Patio",             tipo: "PUNTO_VENTA", activo: true },
-  },
-];
 
 // ─── Categorías reales del negocio ───────────────────────────────────────────
 

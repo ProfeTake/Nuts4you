@@ -11,6 +11,7 @@ export interface LoginResult {
     rut: string
     nombre: string
     rol: string
+    esDemo: boolean
   }
   pdv: {
     id: number
@@ -72,6 +73,7 @@ export async function login(rut: string, password: string): Promise<LoginResult>
     nombre: u.nombre,
     rol:    u.rol.nombre,
     pdvId:  pdv?.id ?? null,
+    esDemo: u.es_demo,
   }
 
   const token = jwt.sign(payload, entorno.jwtSecret, {
@@ -80,7 +82,7 @@ export async function login(rut: string, password: string): Promise<LoginResult>
 
   return {
     token,
-    usuario: { id: u.id, rut: u.rut, nombre: u.nombre, rol: u.rol.nombre },
+    usuario: { id: u.id, rut: u.rut, nombre: u.nombre, rol: u.rol.nombre, esDemo: u.es_demo },
     pdv: pdv ? { id: pdv.id, nombre: pdv.nombre, tipo: pdv.tipo, activo: pdv.activo } : null,
   }
 }
@@ -92,7 +94,7 @@ export async function me(usuarioId: number): Promise<LoginResult['usuario'] & { 
   })
   const pdv = await resolverPDVHoy(u.id, u.pdv)
   return {
-    id: u.id, rut: u.rut, nombre: u.nombre, rol: u.rol.nombre,
+    id: u.id, rut: u.rut, nombre: u.nombre, rol: u.rol.nombre, esDemo: u.es_demo,
     pdv: pdv ? { id: pdv.id, nombre: pdv.nombre, tipo: pdv.tipo, activo: pdv.activo } : null,
   }
 }
