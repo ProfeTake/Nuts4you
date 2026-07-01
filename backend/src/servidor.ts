@@ -10,13 +10,20 @@ import manejarErrores from "./middlewares/manejarErrores";
 const app = express();
 
 // Middlewares globales
-const origenesPermitidos = entorno.nodoEntorno === "production" && entorno.frontendUrl
-  ? [entorno.frontendUrl]
-  : true; // development: permite cualquier origen
+// En producción exigimos FRONTEND_URL explícito (fallar de forma segura, no abrir CORS).
+// En desarrollo permitimos los orígenes locales conocidos de Vite (dev + preview).
+const origenesPermitidos =
+  entorno.nodoEntorno === "production"
+    ? entorno.frontendUrl
+      ? [entorno.frontendUrl]
+      : (() => {
+          throw new Error("[FATAL] FRONTEND_URL no configurado en producción.");
+        })()
+    : ["http://localhost:5173", "http://localhost:4173"];
 
 app.use(cors({ origin: origenesPermitidos }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 
 // Rutas de la API
 app.use("/api", rutaPrincipal);

@@ -1,9 +1,21 @@
 import prisma from '../config/prisma'
-import type { DespachoInput, AjustarStockInput, CrearInventarioInput, CrearProductoInput } from '../validaciones/bodega.schema'
+import type { DespachoInput, AjustarStockInput, CrearInventarioInput, CrearProductoInput, GuardarLoteInput } from '../validaciones/bodega.schema'
+import { rangoFechaChile } from '../lib/tiempoChile'
 
-const BODEGA_PDV_ID = 1
+// El ID de la Bodega Central se resuelve por tipo (BODEGA), no se asume que sea 1.
+// Esto evita que un re-seed o migración con IDs distintos rompa silenciosamente
+// toda la lógica de despacho. Se cachea tras la primera resolución.
+let bodegaPdvIdCache: number | null = null
+
+async function resolverBodegaId(): Promise<number> {
+  if (bodegaPdvIdCache != null) return bodegaPdvIdCache
+  const bodega = await prisma.pDV.findFirstOrThrow({ where: { tipo: 'BODEGA' } })
+  bodegaPdvIdCache = bodega.id
+  return bodegaPdvIdCache
+}
 
 export async function getStockBodega() {
+  const BODEGA_PDV_ID = await resolverBodegaId()
   const items = await prisma.inventario.findMany({
     where: { pdv_id: BODEGA_PDV_ID },
     include: {
@@ -29,6 +41,7 @@ export async function getStockBodega() {
 }
 
 export async function ajustarStock(inventarioId: number, data: AjustarStockInput) {
+  const BODEGA_PDV_ID = await resolverBodegaId()
   const inv = await prisma.inventario.findUniqueOrThrow({ where: { id: inventarioId } })
   if (inv.pdv_id !== BODEGA_PDV_ID) {
     throw new Error('Solo se puede ajustar stock de la bodega central desde aquí')
@@ -56,6 +69,7 @@ export async function ajustarStock(inventarioId: number, data: AjustarStockInput
 }
 
 export async function registrarDespacho(data: DespachoInput, _usuarioId: number) {
+  const BODEGA_PDV_ID = await resolverBodegaId()
   // Verificar que el PDV destino existe y es PUNTO_VENTA
   const pdvDestino = await prisma.pDV.findUnique({
     where: { id: data.pdvDestinoId },
@@ -81,6 +95,10 @@ export async function registrarDespacho(data: DespachoInput, _usuarioId: number)
     }
   }
 
+  // Un id de lote por despacho: agrupa todos los productos de este envío.
+  const loteId = crypto.randomUUID()
+  const fechaLote = new Date()
+
   // Ejecutar despacho en transacción
   await prisma.$transaction(async (tx) => {
     for (const item of data.items) {
@@ -105,11 +123,13 @@ export async function registrarDespacho(data: DespachoInput, _usuarioId: number)
       // Registrar movimiento TRASPASO
       await tx.movimientoInv.create({
         data: {
+          lote_id:        loteId,
           producto_id:    item.productoId,
           pdv_origen_id:  BODEGA_PDV_ID,
           pdv_destino_id: data.pdvDestinoId,
           tipo:           'TRASPASO',
           cantidad:       item.cantidad,
+          fecha:          fechaLote, // mismo timestamp para todo el despacho
         },
       })
     }
@@ -124,6 +144,7 @@ export async function registrarDespacho(data: DespachoInput, _usuarioId: number)
 }
 
 export async function getProductosDisponibles() {
+  const BODEGA_PDV_ID = await resolverBodegaId()
   const enBodega = await prisma.inventario.findMany({
     where: { pdv_id: BODEGA_PDV_ID },
     select: { producto_id: true },
@@ -142,6 +163,7 @@ export async function getProductosDisponibles() {
 }
 
 export async function crearInventarioBodega(data: CrearInventarioInput) {
+  const BODEGA_PDV_ID = await resolverBodegaId()
   const existe = await prisma.inventario.findUnique({
     where: { pdv_id_producto_id: { pdv_id: BODEGA_PDV_ID, producto_id: data.productoId } },
   })
@@ -169,6 +191,7 @@ export async function crearInventarioBodega(data: CrearInventarioInput) {
 }
 
 export async function eliminarInventarioBodega(inventarioId: number) {
+  const BODEGA_PDV_ID = await resolverBodegaId()
   const inv = await prisma.inventario.findUniqueOrThrow({ where: { id: inventarioId } })
   if (inv.pdv_id !== BODEGA_PDV_ID) throw new Error('Solo se puede eliminar stock de la bodega central')
   await prisma.inventario.delete({ where: { id: inventarioId } })
@@ -218,6 +241,7 @@ export async function crearProducto(data: CrearProductoInput) {
   })
 
   // Crear inventario en bodega central
+  const BODEGA_PDV_ID = await resolverBodegaId()
   const inv = await prisma.inventario.create({
     data: {
       pdv_id:       BODEGA_PDV_ID,
@@ -239,6 +263,135 @@ export async function crearProducto(data: CrearProductoInput) {
   }
 }
 
+/**
+ * Guarda por lote los ingresos/utilizadas escritos en la tabla de inventario.
+ * Por cada ítem con cambios calcula el saldo nuevo = saldo anterior + ingresos − utilizadas,
+ * actualiza el stock y registra una entrada en el historial (con snapshot de quién/cuándo).
+ */
+export async function guardarLoteInventario(
+  data: GuardarLoteInput,
+  usuario: { id: number; nombre: string },
+) {
+  const BODEGA_PDV_ID = await resolverBodegaId()
+
+  // Solo procesamos ítems con algún cambio real.
+  const cambios = data.items.filter(
+    (i) => (i.ingresos ?? 0) > 0 || (i.utilizadas ?? 0) > 0 || (i.nombre && i.nombre.trim()),
+  )
+  if (cambios.length === 0) throw new Error('No hay cambios para guardar')
+
+  // Cargar inventarios involucrados y validar que sean de la bodega central.
+  const ids = cambios.map((c) => c.inventarioId)
+  const inventarios = await prisma.inventario.findMany({
+    where:   { id: { in: ids } },
+    include: { producto: { select: { id: true, nombre: true } } },
+  })
+  const porId = new Map(inventarios.map((inv) => [inv.id, inv]))
+
+  for (const c of cambios) {
+    const inv = porId.get(c.inventarioId)
+    if (!inv) throw new Error(`Ítem de inventario #${c.inventarioId} no encontrado`)
+    if (inv.pdv_id !== BODEGA_PDV_ID) throw new Error('Solo se puede editar stock de la bodega central')
+    const saldoNuevo = inv.stock_actual + (c.ingresos ?? 0) - (c.utilizadas ?? 0)
+    if (saldoNuevo < 0) {
+      throw new Error(`El stock de "${inv.producto.nombre}" no puede quedar negativo (saldo resultante ${saldoNuevo})`)
+    }
+  }
+
+  // Un id de lote por cada guardado: agrupa todos los ítems de este "Guardar".
+  const loteId = crypto.randomUUID()
+  const fechaLote = new Date()
+
+  // Aplicar todo en una transacción: actualizar stock/nombre + registrar historial.
+  await prisma.$transaction(async (tx) => {
+    for (const c of cambios) {
+      const inv = porId.get(c.inventarioId)!
+      const ingresos   = c.ingresos ?? 0
+      const utilizadas = c.utilizadas ?? 0
+      const saldoAnterior = inv.stock_actual
+      const saldoNuevo    = saldoAnterior + ingresos - utilizadas
+      const nombreNuevo   = c.nombre?.trim()
+
+      if (nombreNuevo && nombreNuevo !== inv.producto.nombre) {
+        await tx.producto.update({ where: { id: inv.producto_id }, data: { nombre: nombreNuevo } })
+      }
+      if (ingresos !== 0 || utilizadas !== 0) {
+        await tx.inventario.update({ where: { id: inv.id }, data: { stock_actual: saldoNuevo } })
+      }
+
+      await tx.historialInventario.create({
+        data: {
+          lote_id:        loteId,
+          inventario_id:  inv.id,
+          producto_id:    inv.producto_id,
+          nombre:         nombreNuevo || inv.producto.nombre,
+          saldo_anterior: saldoAnterior,
+          ingresos,
+          utilizadas,
+          saldo_nuevo:    saldoNuevo,
+          usuario_id:     usuario.id,
+          usuario_nombre: usuario.nombre,
+          creado_en:      fechaLote, // mismo timestamp para todo el lote
+        },
+      })
+    }
+  })
+
+  return { guardados: cambios.length }
+}
+
+/**
+ * Historial de ingresos/ajustes de bodega, filtrable por rango de fechas (Chile),
+ * AGRUPADO por lote de guardado: cada grupo = un "Guardar" con sus ítems.
+ */
+export async function getHistorialInventario(desde?: string, hasta?: string) {
+  const where: { creado_en?: { gte?: Date; lte?: Date } } = {}
+  if (desde || hasta) {
+    where.creado_en = {}
+    if (desde) where.creado_en.gte = rangoFechaChile(desde).inicio
+    if (hasta) where.creado_en.lte = rangoFechaChile(hasta).fin
+  }
+
+  const filas = await prisma.historialInventario.findMany({
+    where,
+    orderBy: { creado_en: 'desc' },
+    take: 2000,
+  })
+
+  // Agrupar por lote_id (los registros antiguos sin lote forman grupos individuales).
+  const grupos = new Map<string, typeof filas>()
+  for (const f of filas) {
+    const clave = f.lote_id ?? `solo-${f.id}`
+    const arr = grupos.get(clave) ?? []
+    arr.push(f)
+    grupos.set(clave, arr)
+  }
+
+  return [...grupos.entries()].map(([loteId, items]) => {
+    const primero = items[0]
+    return {
+      loteId,
+      fecha:          primero.creado_en.toISOString(),
+      usuario:        primero.usuario_nombre ?? 'Sistema',
+      cantidad:       items.length,
+      totalIngresos:  items.reduce((s, i) => s + i.ingresos, 0),
+      totalUtilizadas: items.reduce((s, i) => s + i.utilizadas, 0),
+      items: items.map((f) => ({
+        id:            f.id,
+        nombre:        f.nombre,
+        saldoAnterior: f.saldo_anterior,
+        ingresos:      f.ingresos,
+        utilizadas:    f.utilizadas,
+        saldoNuevo:    f.saldo_nuevo,
+      })),
+    }
+  }).sort((a, b) => b.fecha.localeCompare(a.fecha)) // más reciente primero
+}
+
+/**
+ * Historial de despachos AGRUPADO por evento (lote_id): cada grupo = un envío con
+ * todos sus productos. Los movimientos antiguos sin lote forman grupos individuales.
+ */
 export async function getDespachos(pdvId?: number) {
   const movimientos = await prisma.movimientoInv.findMany({
     where: {
@@ -251,15 +404,32 @@ export async function getDespachos(pdvId?: number) {
       pdv_destino: { select: { nombre: true } },
     },
     orderBy: { fecha: 'desc' },
-    take: 100,
+    take: 1000,
   })
 
-  return movimientos.map((m) => ({
-    id:          m.id,
-    producto:    m.producto.nombre,
-    origen:      m.pdv_origen?.nombre  ?? 'Bodega Central',
-    destino:     m.pdv_destino?.nombre ?? '—',
-    cantidad:    m.cantidad,
-    fecha:       m.fecha.toISOString(),
-  }))
+  // Agrupar por lote_id (los antiguos sin lote se agrupan por su propio id).
+  const grupos = new Map<string, typeof movimientos>()
+  for (const m of movimientos) {
+    const clave = m.lote_id ?? `solo-${m.id}`
+    const arr = grupos.get(clave) ?? []
+    arr.push(m)
+    grupos.set(clave, arr)
+  }
+
+  return [...grupos.entries()].map(([loteId, items]) => {
+    const primero = items[0]
+    return {
+      loteId,
+      fecha:        primero.fecha.toISOString(),
+      origen:       primero.pdv_origen?.nombre  ?? 'Bodega Central',
+      destino:      primero.pdv_destino?.nombre ?? '—',
+      cantidadItems: items.length,
+      totalUnidades: items.reduce((s, m) => s + m.cantidad, 0),
+      items: items.map((m) => ({
+        id:       m.id,
+        producto: m.producto.nombre,
+        cantidad: m.cantidad,
+      })),
+    }
+  }).sort((a, b) => b.fecha.localeCompare(a.fecha))
 }

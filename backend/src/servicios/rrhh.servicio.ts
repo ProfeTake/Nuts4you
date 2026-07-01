@@ -1,7 +1,9 @@
 import bcrypt from 'bcryptjs'
 import prisma from '../config/prisma'
 import { calcularBono } from './calculos.servicio'
+import { getTramosBonoActivosPorPdv, tramosParaPdv } from './configBono.servicio'
 import { enviarCorreoHorario } from './correo.servicio'
+import { usuarioIncludeBasico } from './shared/usuario.query'
 import type {
   CrearPersonalInput,
   EditarPersonalInput,
@@ -42,14 +44,7 @@ export async function getPersonal() {
 
   const usuarios = await prisma.usuario.findMany({
     where: { rol_id: rol.id },
-    include: {
-      pdv:    { select: { id: true, nombre: true } },
-      turnos: {
-        orderBy: { fecha_apertura: 'desc' },
-        take: 1,
-        select: { id: true, fecha_apertura: true },
-      },
-    },
+    include: usuarioIncludeBasico,
     orderBy: { nombre: 'asc' },
   })
 
@@ -78,10 +73,7 @@ export async function crearPersonal(data: CrearPersonalInput) {
       pdv_id:        data.pdvId ?? null,
       pago_diario:   data.pagoDiario,
     },
-    include: {
-      pdv:    { select: { id: true, nombre: true } },
-      turnos: { orderBy: { fecha_apertura: 'desc' }, take: 1, select: { id: true, fecha_apertura: true } },
-    },
+    include: usuarioIncludeBasico,
   })
 
   return formatearPersonal(usuario)
@@ -98,10 +90,7 @@ export async function editarPersonal(id: number, data: EditarPersonalInput) {
   const usuario = await prisma.usuario.update({
     where: { id },
     data:  updateData,
-    include: {
-      pdv:    { select: { id: true, nombre: true } },
-      turnos: { orderBy: { fecha_apertura: 'desc' }, take: 1, select: { id: true, fecha_apertura: true } },
-    },
+    include: usuarioIncludeBasico,
   })
 
   return formatearPersonal(usuario)
@@ -440,9 +429,12 @@ export async function getNomina(mes: string) {
     },
     include: {
       usuario: { select: { id: true, nombre: true, pago_diario: true } },
-      pdv:     { select: { nombre: true } },
+      pdv:     { select: { id: true, nombre: true } },
     },
   })
+
+  // Tramos de bono desde BD (con fallback a TABLA_BONOS por nombre).
+  const tramosPorPdv = await getTramosBonoActivosPorPdv()
 
   // Agregar por usuario calculando bono turno a turno
   const porUsuario = new Map<number, {
@@ -457,7 +449,8 @@ export async function getNomina(mes: string) {
   for (const turno of turnos) {
     const uid         = turno.usuario?.id ?? 0
     const ventaTurno  = turno.total_calculado ?? 0
-    const bonoTurno   = calcularBono(turno.pdv.nombre, ventaTurno)
+    const tramos      = tramosParaPdv(tramosPorPdv, turno.pdv.id, turno.pdv.nombre)
+    const bonoTurno   = calcularBono(tramos, ventaTurno)
     const descuento   = turno.diferencia_caja !== null && turno.diferencia_caja < 0
       ? Math.abs(turno.diferencia_caja)
       : 0

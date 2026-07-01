@@ -9,14 +9,21 @@
 // ─── Tabla de bonos por sucursal ─────────────────────────────────────────────
 // Fuente: archivo Excel "Sueldos Feb 2026.xlsx" — fórmulas verificadas.
 // Estructura: umbrales ordenados de mayor a menor (primer match gana).
-// Claves = nombre exacto del PDV en la BD (ver seed.ts).
+//
+// ⚠️ ADVERTENCIA: Las claves son los nombres EXACTOS del PDV en la BD (ver seed.ts).
+// Si un admin renombra un PDV desde la UI, calcularBono() devolverá 0 silenciosamente
+// para todos los turnos de ese PDV. No hay vínculo por ID.
+// TODO P6: migrar a tabla `ConfigBono` en BD usando pdv_id como clave (umbral_venta,
+// monto_bono, activo) para que el admin edite umbrales sin tocar código.
 
-interface TramoBonoItem {
+export interface TramoBonoItem {
   umbral: number  // venta mínima diaria en CLP para obtener este bono
   bono:   number  // monto del bono en CLP
 }
 
-const TABLA_BONOS: Record<string, TramoBonoItem[]> = {
+// Fallback en código usado solo si la tabla `ConfigBono` aún no tiene tramos
+// para un PDV (ej. recién creado). La fuente de verdad es la BD (ver P6).
+export const TABLA_BONOS: Record<string, TramoBonoItem[]> = {
   'Mall Patio': [
     { umbral: 400_000, bono: 30_000 },
     { umbral: 350_000, bono: 19_000 },
@@ -48,15 +55,16 @@ const TABLA_BONOS: Record<string, TramoBonoItem[]> = {
 }
 
 /**
- * Calcula el bono individual de un turno.
- * @param pdvNombre  - Nombre del PDV tal como está en la BD
+ * Calcula el bono individual de un turno a partir de los tramos del PDV.
+ * Lógica pura: recibe los tramos (desde BD o fallback) y la venta diaria.
+ * @param tramos      - Tramos de bono del PDV; se evalúan de mayor a menor umbral
  * @param ventaDiaria - Total vendido en ese turno (CLP)
- * @returns Bono en CLP (0 si no alcanza ningún umbral o PDV sin tabla)
+ * @returns Bono en CLP (0 si no alcanza ningún umbral o no hay tramos)
  */
-export function calcularBono(pdvNombre: string, ventaDiaria: number): number {
-  const tabla = TABLA_BONOS[pdvNombre]
-  if (!tabla) return 0
-  for (const tramo of tabla) {
+export function calcularBono(tramos: TramoBonoItem[] | undefined, ventaDiaria: number): number {
+  if (!tramos || tramos.length === 0) return 0
+  // Ordenar de mayor a menor por seguridad (no depender del orden de la BD).
+  for (const tramo of [...tramos].sort((a, b) => b.umbral - a.umbral)) {
     if (ventaDiaria >= tramo.umbral) return tramo.bono
   }
   return 0

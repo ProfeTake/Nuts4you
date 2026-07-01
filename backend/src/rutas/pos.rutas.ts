@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import prisma from '../config/prisma'
 import { autenticar } from '../middlewares/autenticar'
 import { autorizar } from '../middlewares/autorizar'
 import { abrirTurnoSchema, cerrarTurnoSchema, retiroSchema, gastoSchema } from '../validaciones/pos.schema'
@@ -13,7 +14,6 @@ router.use(autenticar)
 
 router.get('/pdvs', async (_req, res, next) => {
   try {
-    const prisma = (await import('../config/prisma')).default
     const pdvs = await prisma.pDV.findMany({
       where:   { tipo: 'PUNTO_VENTA', activo: true },
       select:  { id: true, nombre: true, tipo: true, activo: true },

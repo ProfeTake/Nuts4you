@@ -1,8 +1,8 @@
 import { Router } from 'express'
 import { autenticar } from '../middlewares/autenticar'
 import { autorizar } from '../middlewares/autorizar'
-import { despachoSchema, ajustarStockSchema, crearInventarioSchema, crearProductoSchema } from '../validaciones/bodega.schema'
-import { getStockBodega, registrarDespacho, getDespachos, ajustarStock, crearInventarioBodega, eliminarInventarioBodega, getProductosDisponibles, getCategorias, crearProducto, buscarPorCodigoBarra } from '../servicios/bodega.servicio'
+import { despachoSchema, ajustarStockSchema, crearInventarioSchema, crearProductoSchema, guardarLoteSchema } from '../validaciones/bodega.schema'
+import { getStockBodega, registrarDespacho, getDespachos, ajustarStock, crearInventarioBodega, eliminarInventarioBodega, getProductosDisponibles, getCategorias, crearProducto, buscarPorCodigoBarra, guardarLoteInventario, getHistorialInventario } from '../servicios/bodega.servicio'
 
 const router = Router()
 
@@ -90,6 +90,40 @@ router.patch('/stock/:inventarioId',
       }
       next(error)
     }
+  }
+)
+
+/** POST /api/bodega/stock/lote — Guardar por lote ingresos/utilizadas de la tabla editable */
+router.post('/stock/lote',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR', 'BODEGUERO'),
+  async (req, res, next) => {
+    const parsed = guardarLoteSchema.safeParse(req.body)
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Datos inválidos', detalle: parsed.error.flatten() })
+      return
+    }
+    try {
+      const data = await guardarLoteInventario(parsed.data, { id: req.usuario!.id, nombre: req.usuario!.nombre })
+      res.json({ data })
+    } catch (error) {
+      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
+      next(error)
+    }
+  }
+)
+
+/** GET /api/bodega/historial?desde=&hasta= — Historial de ingresos/ajustes de bodega */
+router.get('/historial',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR', 'BODEGUERO'),
+  async (req, res, next) => {
+    const desde = typeof req.query.desde === 'string' ? req.query.desde : undefined
+    const hasta = typeof req.query.hasta === 'string' ? req.query.hasta : undefined
+    try {
+      const data = await getHistorialInventario(desde, hasta)
+      res.json({ data })
+    } catch (error) { next(error) }
   }
 )
 

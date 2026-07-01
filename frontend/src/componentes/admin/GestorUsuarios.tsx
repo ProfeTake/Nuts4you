@@ -38,6 +38,7 @@ interface Usuario {
   id:          number;
   rut:         string;
   nombre:      string;
+  email:       string | null;
   rol:         Rol;
   pdvId:       number | null;
   pdvNombre:   string | null;
@@ -49,6 +50,7 @@ interface Usuario {
 interface FormUsuario {
   rut:        string;
   nombre:     string;
+  email:      string;
   password:   string;
   rol:        Rol;
   pdvId:      string;
@@ -56,8 +58,10 @@ interface FormUsuario {
 }
 
 const FORM_VACIO: FormUsuario = {
-  rut: "", nombre: "", password: "", rol: "VENDEDOR", pdvId: "", pagoDiario: "28000",
+  rut: "", nombre: "", email: "", password: "", rol: "VENDEDOR", pdvId: "", pagoDiario: "28000",
 };
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const ROLES: Rol[] = ["ADMIN", "SUPERVISOR", "BODEGUERO", "VENDEDOR"];
 
@@ -84,6 +88,7 @@ function ModalUsuario({ usuario, pdvs, onCerrar, onGuardar, guardando }: ModalUs
       ? {
           rut:        usuario.rut,
           nombre:     usuario.nombre,
+          email:      usuario.email ?? "",
           password:   "",
           rol:        usuario.rol,
           pdvId:      usuario.pdvId ? String(usuario.pdvId) : "",
@@ -137,11 +142,28 @@ function ModalUsuario({ usuario, pdvs, onCerrar, onGuardar, guardando }: ModalUs
 
           <div className="space-y-1.5">
             <label className="text-sm font-medium">
+              Correo electrónico {esNuevo && <span className="text-destructive">*</span>}
+            </label>
+            <Input
+              type="email"
+              placeholder="usuario@correo.com"
+              value={form.email}
+              onChange={set("email")}
+            />
+            <p className="text-xs text-muted-foreground">
+              {esNuevo
+                ? "Obligatorio. Se enviarán las credenciales de acceso a este correo."
+                : "Si lo cambias, las próximas notificaciones llegarán al nuevo correo."}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">
               Contraseña{!esNuevo && <span className="text-muted-foreground font-normal"> (dejar en blanco para no cambiar)</span>}
             </label>
             <Input
               type="password"
-              placeholder={esNuevo ? "Mínimo 4 caracteres" : "Nueva contraseña…"}
+              placeholder={esNuevo ? "Mínimo 8 caracteres" : "Nueva contraseña…"}
               value={form.password}
               onChange={set("password")}
             />
@@ -232,9 +254,15 @@ export function GestorUsuarios() {
 
   const mutCrear = useMutation({
     mutationFn: (payload: object) =>
-      apiPost<{ data: Usuario }>("/usuarios", payload),
-    onSuccess: () => {
-      toast.success("Usuario creado correctamente");
+      apiPost<{ data: Usuario & { correoEnviado: boolean } }>("/usuarios", payload),
+    onSuccess: (res) => {
+      if (res.data.correoEnviado) {
+        toast.success("Usuario creado", { description: `Credenciales enviadas a ${res.data.email}` });
+      } else {
+        toast.warning("Usuario creado, pero el correo no se pudo enviar", {
+          description: "Revisa la configuración SMTP o entrega las credenciales manualmente.",
+        });
+      }
       queryClient.invalidateQueries({ queryKey: ["usuarios"] });
       setModalUsuario(null);
     },
@@ -277,11 +305,17 @@ export function GestorUsuarios() {
   const handleGuardar = (form: FormUsuario) => {
     const pdvId = form.pdvId ? parseInt(form.pdvId, 10) : null;
     const pagoDiario = parseInt(form.pagoDiario, 10) || 28000;
+    const email = form.email.trim();
 
     if (modalUsuario === "nuevo") {
+      if (!email || !EMAIL_RE.test(email)) {
+        toast.error("Ingresa un correo electrónico válido. Es obligatorio para enviar las credenciales.");
+        return;
+      }
       mutCrear.mutate({
         rut:        form.rut.trim(),
         nombre:     form.nombre.trim(),
+        email,
         password:   form.password,
         rol:        form.rol,
         pdvId,
@@ -292,6 +326,7 @@ export function GestorUsuarios() {
       if (form.nombre.trim())  payload.nombre   = form.nombre.trim();
       if (form.password)       payload.password = form.password;
       if (form.rut.trim())     payload.rut      = form.rut.trim();
+      if (email && EMAIL_RE.test(email)) payload.email = email;
       mutEditar.mutate({ id: modalUsuario.id, payload });
     }
   };

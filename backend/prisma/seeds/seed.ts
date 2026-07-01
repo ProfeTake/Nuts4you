@@ -24,16 +24,37 @@ async function main() {
     { nombre: 'Cugat Rengo',           tipo: 'PUNTO_VENTA' as const },
     { nombre: 'Cugat Baquedano',       tipo: 'PUNTO_VENTA' as const },
   ]
+  // Usamos el nombre como clave natural (no asumimos que el id autoincremental
+  // coincida con el índice del array, lo cual rompería un re-seed sobre una BD
+  // con IDs distintos). PDV no tiene @@unique en nombre, así que buscamos primero.
   const sucursales: Array<{ id: number; nombre: string }> = []
   for (const s of sucursalesData) {
-    const pdv = await prisma.pDV.upsert({
-      where: { id: sucursalesData.indexOf(s) + 1 },
-      update: { nombre: s.nombre, tipo: s.tipo },
-      create: { nombre: s.nombre, tipo: s.tipo },
-    })
+    const existente = await prisma.pDV.findFirst({ where: { nombre: s.nombre } })
+    const pdv = existente
+      ? await prisma.pDV.update({ where: { id: existente.id }, data: { tipo: s.tipo } })
+      : await prisma.pDV.create({ data: { nombre: s.nombre, tipo: s.tipo } })
     sucursales.push(pdv)
   }
   console.log('✓ Sucursales:', sucursalesData.map((s) => s.nombre).join(', '))
+
+  // ─── Configuración de bonos por sucursal (P6) ────────────────────────────────
+  // Fuente: "Sueldos Feb 2026.xlsx". Idempotente: limpia y recrea por PDV.
+  const bonosPorSucursal: Record<string, Array<{ umbral: number; monto: number }>> = {
+    'Mall Patio':          [{ umbral: 400000, monto: 30000 }, { umbral: 350000, monto: 19000 }, { umbral: 300000, monto: 12000 }, { umbral: 250000, monto: 6000 }],
+    'Paseo Independencia': [{ umbral: 350000, monto: 25000 }, { umbral: 300000, monto: 19000 }, { umbral: 250000, monto: 13000 }, { umbral: 200000, monto: 6000 }],
+    'Open Plaza':          [{ umbral: 300000, monto: 20000 }, { umbral: 250000, monto: 13000 }, { umbral: 200000, monto: 8000 }, { umbral: 160000, monto: 4000 }],
+    'Cugat Rengo':         [{ umbral: 180000, monto: 12000 }, { umbral: 140000, monto: 8000 }, { umbral: 100000, monto: 4000 }],
+    'Cugat Baquedano':     [{ umbral: 180000, monto: 12000 }, { umbral: 140000, monto: 8000 }, { umbral: 100000, monto: 3000 }],
+  }
+  for (const pdv of sucursales) {
+    const tramos = bonosPorSucursal[pdv.nombre]
+    if (!tramos) continue
+    await prisma.configBono.deleteMany({ where: { pdv_id: pdv.id } })
+    await prisma.configBono.createMany({
+      data: tramos.map((t) => ({ pdv_id: pdv.id, umbral_venta: t.umbral, monto_bono: t.monto })),
+    })
+  }
+  console.log('✓ Config de bonos sembrada para', Object.keys(bonosPorSucursal).length, 'sucursales')
 
   // ─── Categorías ───────────────────────────────────────────────────────────────
   const categoriaNames = ['Mezclas', 'Paquetes', 'Promos', 'Líquidos', 'Helados', 'Otros']

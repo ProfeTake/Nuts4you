@@ -33,6 +33,7 @@ import {
   Loader2,
   CheckCircle2,
   Mail,
+  Gift,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -58,6 +59,7 @@ import { apiGet, apiPost, apiPatch } from "@/lib/api";
 import { autoFormatRUT } from "@/lib/rut";
 import { HorariosTurnos }        from "./HorariosVendedoras";
 import { SeguimientoVendedores } from "./SeguimientoVendedores";
+import { ConfigBonos }           from "./ConfigBonos";
 
 // ─── Tipos desde API ────────────────────────────────────────────────────────
 
@@ -341,6 +343,10 @@ export function ModuloRRHH() {
             <TabsTrigger value="seguimiento" className="shrink-0 !h-10 px-4 gap-2 min-w-max text-sm">
               <Star className="size-4" />
               Seguimiento
+            </TabsTrigger>
+            <TabsTrigger value="bonos" className="shrink-0 !h-10 px-4 gap-2 min-w-max text-sm">
+              <Gift className="size-4" />
+              Bonos
             </TabsTrigger>
           </TabsList>
         </div>
@@ -786,6 +792,11 @@ export function ModuloRRHH() {
         {/* ════════════ TAB: SEGUIMIENTO ════════════ */}
         <TabsContent value="seguimiento" className="mt-5">
           <SeguimientoVendedores />
+        </TabsContent>
+
+        {/* ════════════ TAB: BONOS ════════════ */}
+        <TabsContent value="bonos" className="mt-5">
+          <ConfigBonos />
         </TabsContent>
       </Tabs>
 

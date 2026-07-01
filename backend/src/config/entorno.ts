@@ -17,6 +17,14 @@ interface ConfigEntorno {
   smtpFrom?: string;
 }
 
+// Fail-fast: en producción el JWT_SECRET es obligatorio. Sin él, el fallback de
+// desarrollo permitiría a cualquiera con acceso al código forjar tokens válidos.
+if (!process.env.JWT_SECRET && process.env.NODE_ENV === "production") {
+  throw new Error(
+    "[FATAL] JWT_SECRET no está configurado en producción. El servidor no puede arrancar.",
+  );
+}
+
 const entorno: ConfigEntorno = {
   // Railway inyecta PORT automáticamente; PUERTO es el nombre local. Se respeta PORT primero.
   puerto:        Number(process.env.PORT || process.env.PUERTO) || 3001,

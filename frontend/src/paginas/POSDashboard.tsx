@@ -64,22 +64,36 @@ export default function POSDashboard() {
   const {
     inventarioInicial, turno,
     movimientos, agregarMovimiento, eliminarMovimiento, cerrarTurno,
-    cargarGastosDesdeAPI,
+    cargarGastosDesdeAPI, borradorConteo, guardarBorradorConteo,
+    sincronizarTurnoActivo,
   } = useCajaStore();
 
-  // Carga gastos persistidos en BD al montar (recupera estado si el vendedor refresca)
+  // Al montar: reconcilia el turno con el backend (corrige id temporal de apertura
+  // offline / descarta turnos cerrados en otro dispositivo) y carga gastos en BD.
+  useEffect(() => {
+    if (turno?.pdvId) sincronizarTurnoActivo(turno.pdvId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turno?.pdvId]);
+
   useEffect(() => {
     if (turno?.id) cargarGastosDesdeAPI(turno.id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turno?.id]);
 
   // ── Stock ────────────────────────────────────────────────────────────────
+  // Se inicializa desde el borrador persistido para no perder el avance al refrescar.
   const [cocinadasHoy, setCocinadasHoy] = useState<Record<number, number>>(
-    () => Object.fromEntries(MEZCLA_IDS.map(id => [id, 0]))
+    () => borradorConteo?.cocinadas ?? Object.fromEntries(MEZCLA_IDS.map(id => [id, 0]))
   );
   const [stockActual, setStockActual] = useState<Record<number, string>>(
-    () => Object.fromEntries([...PAQUETE_IDS, ...DIRECTO_IDS].map(id => [id, ""]))
+    () => borradorConteo?.stock ?? Object.fromEntries([...PAQUETE_IDS, ...DIRECTO_IDS].map(id => [id, ""]))
   );
+
+  // Persiste el avance del conteo (debounced ligero vía efecto) para sobrevivir refrescos.
+  useEffect(() => {
+    guardarBorradorConteo({ cocinadas: cocinadasHoy, stock: stockActual });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cocinadasHoy, stockActual]);
   const [seccionExpand, setSeccionExpand] = useState<Record<string, boolean>>({
     mezclas: true, paquetes: true, liquidos: true,
   });

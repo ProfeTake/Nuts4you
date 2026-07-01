@@ -19,6 +19,19 @@ export const ajustarStockSchema = z.object({
 
 export type AjustarStockInput = z.infer<typeof ajustarStockSchema>
 
+// Guardado por lote desde la tabla editable de inventario.
+// Cada ítem aporta los ingresos/utilizadas del momento; el servidor calcula el saldo nuevo.
+export const guardarLoteSchema = z.object({
+  items: z.array(z.object({
+    inventarioId: z.number().int().positive(),
+    nombre:       z.string().min(1).max(200).optional(),
+    ingresos:     z.number().int().min(0).default(0),
+    utilizadas:   z.number().int().min(0).default(0),
+  })).min(1).max(200),
+})
+
+export type GuardarLoteInput = z.infer<typeof guardarLoteSchema>
+
 export const crearInventarioSchema = z.object({
   productoId:   z.number().int().positive(),
   stockActual:  z.number().int().min(0).default(0),

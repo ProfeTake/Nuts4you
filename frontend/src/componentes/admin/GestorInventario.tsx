@@ -13,11 +13,13 @@ import {
   GlassWater,
   Search,
   Truck,
-  ArrowRightLeft,
   Save,
   QrCode,
   Plus,
   Wand2,
+  History as HistoryIcon,
+  CalendarDays,
+  X,
 } from "lucide-react";
 import { ModalEscáner } from "@/componentes/bodega/EscánerCodigos";
 import { CatálogoCodigos } from "@/componentes/bodega/CatálogoCodigos";
@@ -36,8 +38,6 @@ import type {
   ItemBodega,
   CategoriaBodega,
   EstadoStock,
-  EntregaSucursal,
-  Sucursal,
 } from "@/tipos/admin.tipos";
 
 // API
@@ -60,6 +60,22 @@ interface ItemBodegaAPI {
 interface CategoriaAPI {
   id:     number;
   nombre: string;
+}
+
+interface DespachoItemDetalle {
+  id:       number;
+  producto: string;
+  cantidad: number;
+}
+
+interface DespachoEvento {
+  loteId:        string;
+  fecha:         string;
+  origen:        string;
+  destino:       string;
+  cantidadItems: number;
+  totalUnidades: number;
+  items:         DespachoItemDetalle[];
 }
 
 interface FormCrear {
@@ -108,7 +124,7 @@ function mapearItem(api: ItemBodegaAPI): ItemBodega {
     id:           String(api.inventarioId), // ← inventarioId para PATCH
     item:         api.nombre,
     categoria:    categoriaAPI(api.categoria),
-    saldoInicial: 0,
+    saldoInicial: saldoActual, // punto de partida = stock actual persistido
     ingresos:     0,
     utilizadas:   0,
     saldoActual,
@@ -146,28 +162,6 @@ function badgeVariante(estado: EstadoStock) {
   }
 }
 
-function badgeEntrega(estado: EntregaSucursal["estado"]) {
-  switch (estado) {
-    case "Entregado":
-      return "bg-emerald-500/10 text-emerald-600 border-emerald-500/30";
-    case "Parcial":
-      return "bg-amber-500/10 text-amber-600 border-amber-500/30";
-    case "Pendiente":
-      return "bg-red-500/10 text-red-600 border-red-500/30";
-  }
-}
-
-// ─── Mock data inicial ───
-
-
-
-const SUCURSAL_LABELS: Record<Sucursal, string> = {
-  Mall: "Mall Patio",
-  Paseo: "Paseo",
-  "Open Plaza": "Open Plaza",
-  Rengo: "Cugat Rengo",
-  Baquedano: "Cugat Baquedano",
-};
 
 // ─── Form de edición de stock ───
 
@@ -182,6 +176,35 @@ const FORM_VACIO: FormItem = {
   stockActual:  0,
   stockCritico: 0,
 };
+
+// ─── Edición inline de la tabla ───
+// Borrador por fila (clave = inventarioId): nombre + ingresos/utilizadas escritos.
+interface DraftRow {
+  nombre:     string;
+  ingresos:   string;
+  utilizadas: string;
+}
+
+interface HistorialItemDetalle {
+  id:            number;
+  nombre:        string;
+  saldoAnterior: number;
+  ingresos:      number;
+  utilizadas:    number;
+  saldoNuevo:    number;
+}
+
+interface HistorialGrupo {
+  loteId:          string;
+  fecha:           string;
+  usuario:         string;
+  cantidad:        number;
+  totalIngresos:   number;
+  totalUtilizadas: number;
+  items:           HistorialItemDetalle[];
+}
+
+const hoyISO = () => new Date().toISOString().slice(0, 10);
 
 // ─── Componente principal ───
 
@@ -205,6 +228,27 @@ export function GestorInventario() {
         .then((r) => r.data)
         .catch(() => [] as CategoriaAPI[]),
   });
+
+  // Historial real de despachos a sucursales, agrupado por evento de despacho
+  const { data: despachos = [] } = useQuery({
+    queryKey: ["bodega", "despachos"],
+    queryFn: () =>
+      apiGet<{ data: DespachoEvento[] }>("/bodega/despachos")
+        .then((r) => r.data)
+        .catch(() => [] as DespachoEvento[]),
+  });
+
+  // Despachos realizados dentro del mes actual (para el dashboard de bodega)
+  const despachosDelMes = useMemo(() => {
+    const ahora = new Date();
+    return despachos.filter((d) => {
+      const f = new Date(d.fecha);
+      return f.getFullYear() === ahora.getFullYear() && f.getMonth() === ahora.getMonth();
+    }).length;
+  }, [despachos]);
+
+  // Modal de detalle de un despacho
+  const [detalleDespacho, setDetalleDespacho] = useState<DespachoEvento | null>(null);
 
   const mutacionAjuste = useMutation({
     mutationFn: ({ inventarioId, data }: { inventarioId: number; data: FormItem }) =>
@@ -264,13 +308,74 @@ export function GestorInventario() {
     },
   });
 
+  // Guardado por lote de la tabla editable
+  const [confirmarLote, setConfirmarLote] = useState(false);
+  const mutacionLote = useMutation({
+    mutationFn: (items: { inventarioId: number; nombre?: string; ingresos: number; utilizadas: number }[]) =>
+      apiPost<{ data: { guardados: number } }>("/bodega/stock/lote", { items }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["bodega", "stock"] });
+      queryClient.invalidateQueries({ queryKey: ["bodega", "historial"] });
+      toast.success(`${res.data.guardados} ítem(s) actualizado(s) en bodega`);
+      setBorrador({});
+      setConfirmarLote(false);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Error al guardar los cambios");
+    },
+  });
+
   // Estado local
   const [items, setItems] = useState<ItemBodega[]>([]);
-  const [entregas, setEntregas] = useState<EntregaSucursal[]>([]);
+  // Borrador de edición inline (clave = inventarioId)
+  const [borrador, setBorrador] = useState<Record<string, DraftRow>>({});
 
   useEffect(() => {
     if (stockApi) setItems(stockApi);
   }, [stockApi]);
+
+  // Lee el borrador de una fila o sus valores por defecto
+  const draftDe = useCallback(
+    (item: ItemBodega): DraftRow =>
+      borrador[item.id] ?? { nombre: item.item, ingresos: "", utilizadas: "" },
+    [borrador]
+  );
+
+  const setBorradorCampo = useCallback(
+    (item: ItemBodega, campo: keyof DraftRow, valor: string) => {
+      setBorrador((prev) => {
+        const actual = prev[item.id] ?? { nombre: item.item, ingresos: "", utilizadas: "" };
+        const limpio = campo === "nombre" ? valor : valor.replace(/\D/g, "");
+        return { ...prev, [item.id]: { ...actual, [campo]: limpio } };
+      });
+    },
+    []
+  );
+
+  // Ítems con cambios reales (ingresos/utilizadas > 0 o nombre distinto)
+  const itemsConCambios = useMemo(() => {
+    return items
+      .map((item) => {
+        const d = borrador[item.id];
+        if (!d) return null;
+        const ingresos   = parseInt(d.ingresos, 10) || 0;
+        const utilizadas = parseInt(d.utilizadas, 10) || 0;
+        const nombreCambia = d.nombre.trim() && d.nombre.trim() !== item.item;
+        if (ingresos === 0 && utilizadas === 0 && !nombreCambia) return null;
+        return {
+          inventarioId: Number(item.id),
+          nombre:       nombreCambia ? d.nombre.trim() : undefined,
+          ingresos,
+          utilizadas,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+  }, [items, borrador]);
+
+  const guardarLote = useCallback(() => {
+    if (itemsConCambios.length === 0) return;
+    mutacionLote.mutate(itemsConCambios);
+  }, [itemsConCambios, mutacionLote]);
 
   const [busqueda, setBusqueda] = useState("");
 
@@ -318,11 +423,8 @@ export function GestorInventario() {
   const resumen = useMemo(() => {
     const sinStock = items.filter((i) => i.estado === "SIN STOCK").length;
     const pocoStock = items.filter((i) => i.estado === "POCO STOCK").length;
-    const entregasPendientes = entregas.filter(
-      (e) => e.estado !== "Entregado"
-    ).length;
-    return { sinStock, pocoStock, entregasPendientes, total: items.length };
-  }, [items, entregas]);
+    return { sinStock, pocoStock, total: items.length };
+  }, [items]);
 
   // ── Abrir dialog para editar ──
   const abrirEditar = useCallback(
@@ -348,21 +450,6 @@ export function GestorInventario() {
   const confirmarEliminar = useCallback(() => {
     if (eliminandoId) mutacionEliminar.mutate(Number(eliminandoId));
   }, [eliminandoId, mutacionEliminar]);
-
-  // ── Marcar entrega como completada ──
-  const completarEntrega = useCallback((id: string) => {
-    setEntregas((prev) =>
-      prev.map((e) =>
-        e.id === id
-          ? {
-              ...e,
-              cantidadEntregada: e.cantidadSolicitada,
-              estado: "Entregado" as const,
-            }
-          : e
-      )
-    );
-  }, []);
 
   const setField = useCallback(
     <K extends keyof FormItem>(campo: K, valor: FormItem[K]) => {
@@ -416,9 +503,8 @@ export function GestorInventario() {
           colorAlerta="text-amber-600"
         />
         <MiniCard
-          label="Entregas Pend."
-          valor={resumen.entregasPendientes}
-          alerta={resumen.entregasPendientes > 0}
+          label="Despachos (mes)"
+          valor={despachosDelMes}
           colorAlerta="text-blue-600"
         />
       </div>
@@ -434,7 +520,24 @@ export function GestorInventario() {
         />
       </div>
 
-      {/* ── Tabs: Mezclas/Conos | Líquidos | Despachos ── */}
+      {/* ── Barra de guardado (aparece cuando hay cambios sin guardar) ── */}
+      {itemsConCambios.length > 0 && (
+        <div className="sticky top-2 z-30 flex items-center justify-between gap-3 rounded-xl border-2 border-primary bg-background px-4 py-2.5 shadow-md">
+          <p className="text-sm font-medium text-foreground">
+            Tienes <strong>{itemsConCambios.length}</strong> ítem{itemsConCambios.length !== 1 ? "s" : ""} con cambios sin guardar
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setBorrador({})}>
+              Descartar
+            </Button>
+            <Button size="sm" className="gap-1.5" onClick={() => setConfirmarLote(true)}>
+              <Save className="size-4" /> Guardar cambios
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Tabs: Mezclas/Conos | Líquidos | Despachos | Códigos | Historial ── */}
       <Tabs defaultValue={0}>
         <TabsList>
           <TabsTrigger value={0}>
@@ -453,7 +556,11 @@ export function GestorInventario() {
           </TabsTrigger>
           <TabsTrigger value={2}>
             <Truck className="size-4" />
-            Despachos
+            Despacho
+          </TabsTrigger>
+          <TabsTrigger value={4}>
+            <HistoryIcon className="size-4" />
+            Historial de ingreso
           </TabsTrigger>
           <TabsTrigger value={3}>
             <QrCode className="size-4" />
@@ -465,6 +572,8 @@ export function GestorInventario() {
         <TabsContent value={0} className="mt-4">
           <TablaInventario
             items={mezclas}
+            draftDe={draftDe}
+            onCampo={setBorradorCampo}
             onEditar={abrirEditar}
             onEliminar={setEliminandoId}
           />
@@ -474,6 +583,8 @@ export function GestorInventario() {
         <TabsContent value={1} className="mt-4">
           <TablaInventario
             items={liquidos}
+            draftDe={draftDe}
+            onCampo={setBorradorCampo}
             onEditar={abrirEditar}
             onEliminar={setEliminandoId}
           />
@@ -488,12 +599,67 @@ export function GestorInventario() {
         <TabsContent value={3} className="mt-4">
           <CatálogoCodigos />
         </TabsContent>
+
+        {/* Tab Historial de ingresos */}
+        <TabsContent value={4} className="mt-4">
+          <HistorialInventarioTab />
+        </TabsContent>
       </Tabs>
 
       {/* FAB flotante para escáner */}
       <ModalEscáner onCodigoDetectado={abrirCrearConCodigo} />
 
-      {/* ── Entregas a Sucursales ── */}
+      {/* ── Confirmación de guardado por lote ── */}
+      {confirmarLote && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+          onClick={() => !mutacionLote.isPending && setConfirmarLote(false)}>
+          <div className="w-full max-w-md rounded-2xl border bg-background shadow-2xl"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 pt-5 pb-3 flex flex-col items-center text-center gap-2">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+                <Save className="size-6 text-primary" />
+              </div>
+              <h3 className="text-base font-bold">¿Está todo revisado?</h3>
+              <p className="text-sm text-muted-foreground">
+                Vas a guardar <strong className="text-foreground">{itemsConCambios.length}</strong> ítem
+                {itemsConCambios.length !== 1 ? "s" : ""} con cambios de stock en la Bodega Central.
+                Revisa que los ingresos y unidades utilizadas estén correctos antes de continuar.
+              </p>
+            </div>
+            {/* Resumen de cambios */}
+            <div className="mx-5 mb-3 max-h-48 overflow-y-auto rounded-xl border divide-y text-sm">
+              {itemsConCambios.map((c) => {
+                const item = items.find((i) => Number(i.id) === c.inventarioId);
+                const saldoNuevo = (item?.saldoInicial ?? 0) + c.ingresos - c.utilizadas;
+                return (
+                  <div key={c.inventarioId} className="flex items-center justify-between gap-2 px-3 py-2">
+                    <span className="truncate">{c.nombre ?? item?.item}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                      {c.ingresos > 0 && <span className="text-emerald-600">+{c.ingresos} </span>}
+                      {c.utilizadas > 0 && <span className="text-red-600">−{c.utilizadas} </span>}
+                      → <span className="font-semibold text-foreground">{saldoNuevo}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex gap-2 px-5 pb-5">
+              <Button variant="outline" className="flex-1" disabled={mutacionLote.isPending}
+                onClick={() => setConfirmarLote(false)}>
+                Revisar de nuevo
+              </Button>
+              <Button className="flex-1" disabled={mutacionLote.isPending} onClick={guardarLote}>
+                {mutacionLote.isPending
+                  ? <Loader2 className="size-4 mr-1 animate-spin" />
+                  : <Save className="size-4 mr-1" />}
+                Sí, guardar
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Entregas a Sucursales (historial real de despachos) ── */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base font-semibold">
@@ -501,83 +667,64 @@ export function GestorInventario() {
             Entregas a Sucursales
           </CardTitle>
           <p className="text-xs text-muted-foreground">
-            Control de despachos pendientes desde bodega central
+            Historial de despachos enviados desde la Bodega Central
           </p>
         </CardHeader>
         <CardContent>
-          {entregas.length === 0 ? (
+          {despachos.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              No hay entregas registradas
+              Aún no hay despachos registrados
             </p>
           ) : (
             <>
-              {/* Mobile: tarjetas */}
+              {/* Mobile: tarjetas-resumen por despacho */}
               <div className="sm:hidden space-y-2">
-                {entregas.map((e) => (
-                  <div key={e.id} className="rounded-lg border px-4 py-3 space-y-2">
+                {despachos.map((d) => (
+                  <div key={d.loteId} className="rounded-lg border px-4 py-3 space-y-1.5">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="font-semibold text-sm truncate">{SUCURSAL_LABELS[e.sucursal]}</p>
-                        <p className="text-xs text-muted-foreground truncate">{e.item}</p>
-                        <p className="text-xs text-muted-foreground tabular-nums">{e.fecha}</p>
+                        <p className="font-semibold text-sm truncate">{d.destino}</p>
+                        <p className="text-xs text-muted-foreground tabular-nums">
+                          {new Date(d.fecha).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                        </p>
                       </div>
-                      <Badge variant="outline" className={`shrink-0 text-xs ${badgeEntrega(e.estado)}`}>
-                        {e.estado}
+                      <Badge variant="secondary" className="shrink-0 tabular-nums font-semibold">
+                        {d.totalUnidades} u.
                       </Badge>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <div className="flex gap-4 text-xs text-muted-foreground">
-                        <span>Solicitado: <span className="tabular-nums font-medium text-foreground">{e.cantidadSolicitada}</span></span>
-                        <span>Entregado: <span className="tabular-nums font-medium text-foreground">{e.cantidadEntregada}</span></span>
-                      </div>
-                      {e.estado !== "Entregado" ? (
-                        <Button size="sm" variant="outline" onClick={() => completarEntrega(e.id)} className="text-xs h-7 px-2">
-                          <ArrowRightLeft className="size-3 mr-1" />
-                          Completar
-                        </Button>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                    </div>
+                    <Button variant="outline" size="sm" className="w-full" onClick={() => setDetalleDespacho(d)}>
+                      Ver detalle ({d.cantidadItems} producto{d.cantidadItems !== 1 ? "s" : ""})
+                    </Button>
                   </div>
                 ))}
               </div>
 
-              {/* Desktop: tabla */}
+              {/* Desktop: tabla-resumen por despacho */}
               <table className="hidden sm:table w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
-                    <th className="pb-3 pr-4 font-medium">Fecha</th>
-                    <th className="pb-3 pr-4 font-medium">Sucursal</th>
-                    <th className="pb-3 pr-4 font-medium">Ítem</th>
-                    <th className="pb-3 pr-4 font-medium text-right">Solicitado</th>
-                    <th className="pb-3 pr-4 font-medium text-right">Entregado</th>
-                    <th className="pb-3 pr-4 font-medium text-center">Estado</th>
-                    <th className="pb-3 font-medium text-center">Acción</th>
+                    <th className="pb-3 pr-4 font-medium">Fecha y hora</th>
+                    <th className="pb-3 pr-4 font-medium">Sucursal destino</th>
+                    <th className="pb-3 pr-4 font-medium text-center">Productos</th>
+                    <th className="pb-3 pr-4 font-medium text-right">Unidades</th>
+                    <th className="pb-3 font-medium text-center">Detalle</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {entregas.map((e) => (
-                    <tr key={e.id} className="border-b last:border-0">
-                      <td className="py-3 pr-4 tabular-nums">{e.fecha}</td>
-                      <td className="py-3 pr-4 font-medium">{SUCURSAL_LABELS[e.sucursal]}</td>
-                      <td className="py-3 pr-4">{e.item}</td>
-                      <td className="py-3 pr-4 text-right tabular-nums">{e.cantidadSolicitada}</td>
-                      <td className="py-3 pr-4 text-right tabular-nums">{e.cantidadEntregada}</td>
-                      <td className="py-3 pr-4 text-center">
-                        <Badge variant="outline" className={badgeEntrega(e.estado)}>
-                          {e.estado}
-                        </Badge>
+                  {despachos.map((d) => (
+                    <tr key={d.loteId} className="border-b last:border-0">
+                      <td className="py-3 pr-4 tabular-nums whitespace-nowrap text-muted-foreground">
+                        {new Date(d.fecha).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
                       </td>
+                      <td className="py-3 pr-4 font-medium">{d.destino}</td>
+                      <td className="py-3 pr-4 text-center">
+                        <Badge variant="secondary" className="tabular-nums">{d.cantidadItems}</Badge>
+                      </td>
+                      <td className="py-3 pr-4 text-right tabular-nums font-semibold">{d.totalUnidades}</td>
                       <td className="py-3 text-center">
-                        {e.estado !== "Entregado" ? (
-                          <Button size="sm" variant="outline" onClick={() => completarEntrega(e.id)} className="text-xs">
-                            <ArrowRightLeft className="size-3.5 mr-1" />
-                            Completar
-                          </Button>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
+                        <Button variant="outline" size="sm" onClick={() => setDetalleDespacho(d)}>
+                          Ver detalle
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -587,6 +734,51 @@ export function GestorInventario() {
           )}
         </CardContent>
       </Card>
+
+      {/* ── Modal de detalle de un despacho ── */}
+      {detalleDespacho && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+          onClick={() => setDetalleDespacho(null)}>
+          <div className="w-full max-w-lg rounded-2xl border bg-background shadow-2xl flex flex-col max-h-[85dvh]"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-2 border-b px-5 py-4">
+              <div>
+                <h3 className="text-base font-bold">Despacho a {detalleDespacho.destino}</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {new Date(detalleDespacho.fecha).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                  {" · "}{detalleDespacho.cantidadItems} producto{detalleDespacho.cantidadItems !== 1 ? "s" : ""}
+                  {" · "}{detalleDespacho.totalUnidades} unidades
+                </p>
+              </div>
+              <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={() => setDetalleDespacho(null)}>
+                <X className="size-4" />
+                <span className="sr-only">Cerrar</span>
+              </Button>
+            </div>
+            <div className="overflow-y-auto p-0">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground sticky top-0 bg-background">
+                    <th className="px-4 py-2.5 font-medium">Producto</th>
+                    <th className="px-4 py-2.5 font-medium text-right">Cantidad</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detalleDespacho.items.map((it) => (
+                    <tr key={it.id} className="border-b last:border-0">
+                      <td className="px-4 py-2.5 font-medium">{it.producto}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{it.cantidad}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="border-t px-5 py-3">
+              <Button variant="outline" className="w-full" onClick={() => setDetalleDespacho(null)}>Cerrar</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Panel bottom-sheet: Crear / Editar ítem ── */}
       {dialogAbierto && (
@@ -970,15 +1162,198 @@ function MiniCard({ label, valor, alerta, colorAlerta }: MiniCardProps) {
   );
 }
 
+// ─── Subcomponente: Historial de ingresos de productos ───
+
+function HistorialInventarioTab() {
+  // Por defecto: últimos 7 días
+  const hace7 = new Date();
+  hace7.setDate(hace7.getDate() - 7);
+  const [desde, setDesde] = useState(hace7.toISOString().slice(0, 10));
+  const [hasta, setHasta] = useState(hoyISO());
+  const [detalle, setDetalle] = useState<HistorialGrupo | null>(null);
+
+  const { data: grupos = [], isLoading } = useQuery({
+    queryKey: ["bodega", "historial", desde, hasta],
+    queryFn: () =>
+      apiGet<{ data: HistorialGrupo[] }>(`/bodega/historial?desde=${desde}&hasta=${hasta}`)
+        .then((r) => r.data)
+        .catch(() => [] as HistorialGrupo[]),
+  });
+
+  const fmtFecha = (iso: string) =>
+    new Date(iso).toLocaleString("es-CL", {
+      day: "2-digit", month: "2-digit", year: "2-digit",
+      hour: "2-digit", minute: "2-digit",
+    });
+
+  return (
+    <div className="space-y-4">
+      {/* Filtro por rango de fechas (calendario nativo) */}
+      <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-muted/30 px-4 py-3">
+        <CalendarDays className="size-5 text-muted-foreground mb-2" />
+        <div className="space-y-1">
+          <Label htmlFor="hist-desde" className="text-xs text-muted-foreground">Desde</Label>
+          <Input id="hist-desde" type="date" value={desde} max={hasta}
+            onChange={(e) => setDesde(e.target.value)} className="h-9 w-44" />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="hist-hasta" className="text-xs text-muted-foreground">Hasta</Label>
+          <Input id="hist-hasta" type="date" value={hasta} min={desde} max={hoyISO()}
+            onChange={(e) => setHasta(e.target.value)} className="h-9 w-44" />
+        </div>
+        <span className="ml-auto text-xs text-muted-foreground mb-2">
+          {grupos.length} registro{grupos.length !== 1 ? "s" : ""}
+        </span>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : grupos.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <HistoryIcon className="mb-3 size-10 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">
+              No hay movimientos de stock en el rango seleccionado
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          {/* Mobile: tarjetas-resumen por guardado */}
+          <div className="sm:hidden space-y-2">
+            {grupos.map((g) => (
+              <Card key={g.loteId}>
+                <CardContent className="px-4 py-3 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-semibold text-sm">
+                      {g.cantidad} producto{g.cantidad !== 1 ? "s" : ""} agregado{g.cantidad !== 1 ? "s" : ""}
+                    </p>
+                    <span className="text-xs text-muted-foreground tabular-nums shrink-0">{fmtFecha(g.fecha)}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs">
+                    {g.totalIngresos > 0 && <span className="text-emerald-600 font-medium">+{g.totalIngresos} ingresos</span>}
+                    {g.totalUtilizadas > 0 && <span className="text-red-600 font-medium">−{g.totalUtilizadas} utilizadas</span>}
+                    <span className="text-muted-foreground">por {g.usuario}</span>
+                  </div>
+                  <Button variant="outline" size="sm" className="w-full mt-1" onClick={() => setDetalle(g)}>
+                    Ver detalle
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {/* Desktop: tabla-resumen por guardado */}
+          <Card className="hidden sm:block">
+            <CardContent className="p-0">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="px-4 py-3 font-medium">Fecha y hora</th>
+                    <th className="px-4 py-3 font-medium text-center">Productos</th>
+                    <th className="px-4 py-3 font-medium text-right">Ingresos</th>
+                    <th className="px-4 py-3 font-medium text-right">Utilizadas</th>
+                    <th className="px-4 py-3 font-medium">Usuario</th>
+                    <th className="px-4 py-3 font-medium text-center">Detalle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grupos.map((g) => (
+                    <tr key={g.loteId} className="border-b last:border-0">
+                      <td className="px-4 py-2.5 tabular-nums whitespace-nowrap text-muted-foreground">{fmtFecha(g.fecha)}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <Badge variant="secondary" className="tabular-nums">{g.cantidad}</Badge>
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-emerald-600">{g.totalIngresos > 0 ? `+${g.totalIngresos}` : "—"}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-red-600">{g.totalUtilizadas > 0 ? `−${g.totalUtilizadas}` : "—"}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground">{g.usuario}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <Button variant="outline" size="sm" onClick={() => setDetalle(g)}>
+                          Ver detalle
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {/* ── Modal de detalle del guardado ── */}
+      {detalle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+          onClick={() => setDetalle(null)}>
+          <div className="w-full max-w-lg rounded-2xl border bg-background shadow-2xl flex flex-col max-h-[85dvh]"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-2 border-b px-5 py-4">
+              <div>
+                <h3 className="text-base font-bold">Detalle del registro</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {fmtFecha(detalle.fecha)} · por {detalle.usuario} · {detalle.cantidad} producto{detalle.cantidad !== 1 ? "s" : ""}
+                </p>
+              </div>
+              <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={() => setDetalle(null)}>
+                <X className="size-4" />
+                <span className="sr-only">Cerrar</span>
+              </Button>
+            </div>
+            <div className="overflow-y-auto p-0">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground sticky top-0 bg-background">
+                    <th className="px-4 py-2.5 font-medium">Ítem</th>
+                    <th className="px-3 py-2.5 font-medium text-right">Ingr.</th>
+                    <th className="px-3 py-2.5 font-medium text-right">Utiliz.</th>
+                    <th className="px-4 py-2.5 font-medium text-right">Saldo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detalle.items.map((it) => (
+                    <tr key={it.id} className="border-b last:border-0">
+                      <td className="px-4 py-2.5 font-medium">{it.nombre}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-emerald-600">{it.ingresos > 0 ? `+${it.ingresos}` : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-red-600">{it.utilizadas > 0 ? `−${it.utilizadas}` : "—"}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">
+                        <span className="text-muted-foreground">{it.saldoAnterior} → </span>
+                        <span className="font-semibold">{it.saldoNuevo}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="border-t px-5 py-3">
+              <Button variant="outline" className="w-full" onClick={() => setDetalle(null)}>Cerrar</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Subcomponente: Tabla de inventario ───
 
 interface TablaInventarioProps {
   items: ItemBodega[];
+  draftDe: (item: ItemBodega) => DraftRow;
+  onCampo: (item: ItemBodega, campo: keyof DraftRow, valor: string) => void;
   onEditar: (item: ItemBodega) => void;
   onEliminar: (id: string) => void;
 }
 
-function TablaInventario({ items, onEditar, onEliminar }: TablaInventarioProps) {
+/** Calcula el saldo resultante de una fila a partir del borrador */
+function saldoResultante(item: ItemBodega, d: DraftRow): number {
+  const ing = parseInt(d.ingresos, 10) || 0;
+  const uti = parseInt(d.utilizadas, 10) || 0;
+  return item.saldoInicial + ing - uti;
+}
+
+function TablaInventario({ items, draftDe, onCampo, onEditar, onEliminar }: TablaInventarioProps) {
   if (items.length === 0) {
     return (
       <Card className="border-dashed">
@@ -994,50 +1369,56 @@ function TablaInventario({ items, onEditar, onEliminar }: TablaInventarioProps) 
 
   return (
     <div className="space-y-2">
-      {/* ── Vista mobile: tarjetas ── */}
+      {/* ── Vista mobile: tarjetas editables ── */}
       <div className="sm:hidden space-y-2">
-        {items.map((item) => (
-          <Card key={item.id}>
-            <CardContent className="px-4 py-3">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-sm truncate">{item.item}</p>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                    <span>Inicial: <span className="tabular-nums text-foreground">{item.saldoInicial}</span></span>
-                    <span>Ingresos: <span className="tabular-nums text-foreground">{item.ingresos}</span></span>
-                    <span>Usadas: <span className="tabular-nums text-foreground">{item.utilizadas}</span></span>
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Badge variant="outline" className={`text-xs ${badgeVariante(item.estado)}`}>
-                      {item.estado}
-                    </Badge>
-                    <span className={`text-sm font-bold tabular-nums ${item.saldoActual <= 0 ? "text-red-600" : "text-foreground"}`}>
-                      Saldo: {item.saldoActual}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button variant="ghost" size="icon" className="size-8" onClick={() => onEditar(item)}>
-                    <Pencil className="size-3.5" />
-                    <span className="sr-only">Editar</span>
-                  </Button>
+        {items.map((item) => {
+          const d = draftDe(item);
+          const saldo = saldoResultante(item, d);
+          const estado = calcularEstado(saldo, item.stockMinimo, Math.max(item.stockMinimo * 5, saldo + 1));
+          const negativo = saldo < 0;
+          return (
+            <Card key={item.id}>
+              <CardContent className="px-4 py-3 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="flex-1 text-sm font-semibold truncate">{item.item}</p>
                   <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                    variant="ghost" size="icon"
+                    tabIndex={-1}
+                    className="size-8 shrink-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
                     onClick={() => onEliminar(item.id)}
                   >
                     <Trash2 className="size-3.5" />
                     <span className="sr-only">Eliminar</span>
                   </Button>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase text-muted-foreground">Ingresos</label>
+                    <Input inputMode="numeric" placeholder="0" value={d.ingresos}
+                      onChange={(e) => onCampo(item, "ingresos", e.target.value)}
+                      onFocus={(e) => e.target.select()} className="h-9 text-center tabular-nums" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase text-muted-foreground">Utilizadas</label>
+                    <Input inputMode="numeric" placeholder="0" value={d.utilizadas}
+                      onChange={(e) => onCampo(item, "utilizadas", e.target.value)}
+                      onFocus={(e) => e.target.select()} className="h-9 text-center tabular-nums" />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Inicial: <span className="tabular-nums text-foreground">{item.saldoInicial}</span></span>
+                  <span className={`font-bold tabular-nums ${negativo ? "text-red-600" : "text-foreground"}`}>
+                    Saldo: {saldo}
+                  </span>
+                  <Badge variant="outline" className={`text-xs ${badgeVariante(estado)}`}>{estado}</Badge>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
 
-      {/* ── Vista desktop: tabla ── */}
+      {/* ── Vista desktop: tabla editable ── */}
       <Card className="hidden sm:block">
         <CardContent className="p-0">
           <table className="w-full text-sm">
@@ -1045,47 +1426,64 @@ function TablaInventario({ items, onEditar, onEliminar }: TablaInventarioProps) 
               <tr className="border-b text-left text-muted-foreground">
                 <th className="px-4 py-3 font-medium">Ítem</th>
                 <th className="px-4 py-3 font-medium text-right">Saldo Inic.</th>
-                <th className="px-4 py-3 font-medium text-right">Ingresos</th>
-                <th className="px-4 py-3 font-medium text-right">Utilizadas</th>
+                <th className="px-4 py-3 font-medium text-center">Ingresos</th>
+                <th className="px-4 py-3 font-medium text-center">Utilizadas</th>
                 <th className="px-4 py-3 font-medium text-right">Saldo Actual</th>
                 <th className="px-4 py-3 font-medium text-center">Estado</th>
                 <th className="px-4 py-3 font-medium text-center">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
-                <tr key={item.id} className="border-b last:border-0">
-                  <td className="px-4 py-3 font-medium">{item.item}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{item.saldoInicial}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{item.ingresos}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{item.utilizadas}</td>
-                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${item.saldoActual <= 0 ? "text-red-600" : ""}`}>
-                    {item.saldoActual}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <Badge variant="outline" className={`text-xs ${badgeVariante(item.estado)}`}>
-                      {item.estado}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-center gap-1">
-                      <Button variant="ghost" size="icon" className="size-8" onClick={() => onEditar(item)}>
-                        <Pencil className="size-3.5" />
-                        <span className="sr-only">Editar</span>
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-red-500 hover:text-red-600 hover:bg-red-500/10"
-                        onClick={() => onEliminar(item.id)}
-                      >
-                        <Trash2 className="size-3.5" />
-                        <span className="sr-only">Eliminar</span>
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {items.map((item) => {
+                const d = draftDe(item);
+                const saldo = saldoResultante(item, d);
+                const estado = calcularEstado(saldo, item.stockMinimo, Math.max(item.stockMinimo * 5, saldo + 1));
+                const negativo = saldo < 0;
+                return (
+                  <tr key={item.id} className="border-b last:border-0">
+                    <td className="px-4 py-2 font-medium">{item.item}</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{item.saldoInicial}</td>
+                    <td className="px-2 py-2">
+                      <Input inputMode="numeric" placeholder="0" value={d.ingresos}
+                        onChange={(e) => onCampo(item, "ingresos", e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        className="h-8 w-20 mx-auto text-center tabular-nums" />
+                    </td>
+                    <td className="px-2 py-2">
+                      <Input inputMode="numeric" placeholder="0" value={d.utilizadas}
+                        onChange={(e) => onCampo(item, "utilizadas", e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        className="h-8 w-20 mx-auto text-center tabular-nums" />
+                    </td>
+                    <td className={`px-4 py-2 text-right tabular-nums font-semibold ${negativo ? "text-red-600" : ""}`}>
+                      {saldo}
+                    </td>
+                    <td className="px-4 py-2 text-center">
+                      <Badge variant="outline" className={`text-xs ${badgeVariante(estado)}`}>
+                        {estado}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center justify-center gap-1">
+                        <Button variant="ghost" size="icon" className="size-8" tabIndex={-1} onClick={() => onEditar(item)} title="Ajuste manual / stock mínimo">
+                          <Pencil className="size-3.5" />
+                          <span className="sr-only">Editar</span>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          tabIndex={-1}
+                          className="size-8 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                          onClick={() => onEliminar(item.id)}
+                        >
+                          <Trash2 className="size-3.5" />
+                          <span className="sr-only">Eliminar</span>
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </CardContent>

@@ -52,6 +52,24 @@ model PDV {
   solicitudes         Solicitud[]
   turnos_planeados    TurnoPlaneado[]
   cierres_preventivos CierrePreventivo[]
+  config_bonos        ConfigBono[]
+}
+
+/// Tramos de bono por sucursal, editables por el admin (reemplaza la tabla
+/// hardcodeada en calculos.servicio.ts). Cada fila = un umbral de venta diaria
+/// que otorga un monto de bono. Se evalúan de mayor a menor umbral (primer match gana).
+model ConfigBono {
+  id           Int      @id @default(autoincrement())
+  pdv_id       Int
+  umbral_venta Int // venta diaria mínima en CLP para obtener este bono
+  monto_bono   Int // monto del bono en CLP
+  activo       Boolean  @default(true)
+  creado_en    DateTime @default(now())
+  actualizado_en DateTime @updatedAt
+  pdv          PDV      @relation(fields: [pdv_id], references: [id], onDelete: Cascade)
+
+  @@unique([pdv_id, umbral_venta])
+  @@index([pdv_id])
 }
 
 model Categoria {
@@ -174,6 +192,7 @@ enum EstadoSolicitud {
 
 model MovimientoInv {
   id             Int            @id @default(autoincrement())
+  lote_id        String?        @db.VarChar(36) // agrupa los ítems de un mismo despacho
   producto_id    Int
   pdv_origen_id  Int?
   pdv_destino_id Int?
@@ -185,8 +204,30 @@ model MovimientoInv {
   pdv_destino    PDV?           @relation("PDVDestino", fields: [pdv_destino_id], references: [id])
 
   // producto_id ya indexado por MySQL como FK
+  @@index([lote_id])
   @@index([fecha])
   @@index([tipo])
+}
+
+/// Historial de ingresos/ajustes de stock en la Bodega Central.
+/// Cada fila guardada en la tabla de inventario (con ingresos o utilizadas)
+/// genera un registro con snapshot del nombre, saldos y quién/cuándo lo hizo.
+model HistorialInventario {
+  id             Int      @id @default(autoincrement())
+  lote_id        String?  @db.VarChar(36) // agrupa los ítems guardados en un mismo "Guardar"
+  inventario_id  Int?
+  producto_id    Int?
+  nombre         String   // snapshot del nombre del ítem al momento del registro
+  saldo_anterior Int
+  ingresos       Int
+  utilizadas     Int
+  saldo_nuevo    Int
+  usuario_id     Int?     // snapshot (sin FK): sobrevive a la eliminación del usuario
+  usuario_nombre String?
+  creado_en      DateTime @default(now())
+
+  @@index([lote_id])
+  @@index([creado_en])
 }
 
 model RegistroDiario {

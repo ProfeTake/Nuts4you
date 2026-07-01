@@ -86,6 +86,13 @@ export interface CierrePayload {
   stockFinal:         { productoId: number; cantidad: number }[];
 }
 
+// Borrador del conteo en progreso (mezclas cocinadas + saldo final por producto).
+// Se persiste para que un refresco del navegador a mitad de turno no pierda el avance.
+export interface BorradorConteo {
+  cocinadas: Record<number, number>;
+  stock:     Record<number, string>;
+}
+
 // ─── Store ────────────────────────────────────────────────────────────────────
 
 interface CajaState {
@@ -95,6 +102,7 @@ interface CajaState {
   inventarioInicial: ItemInventarioInicial[];
   inventarioSaldo:   Record<number, number>;
   cuadreCaja:        CuadreCaja | null;
+  borradorConteo:    BorradorConteo | null;
 
   abrirTurno: (
     saldoInicial: number,
@@ -115,6 +123,8 @@ interface CajaState {
   eliminarMovimiento:     (id: number) => Promise<void>;
   cargarGastosDesdeAPI:   (turnoId: number) => Promise<void>;
   guardarInventarioSaldo: (saldos: Record<number, number>) => void;
+  guardarBorradorConteo:  (borrador: BorradorConteo) => void;
+  sincronizarTurnoActivo: (pdvId: number) => Promise<void>;
 }
 
 export const useCajaStore = create<CajaState>()(
@@ -126,6 +136,7 @@ export const useCajaStore = create<CajaState>()(
       inventarioInicial: [],
       inventarioSaldo:   {},
       cuadreCaja:        null,
+      borradorConteo:    null,
 
       // ─── Abrir turno ────────────────────────────────────────────────────────
       abrirTurno: async (saldoInicial, pdvId, usuarioId, inventario) => {
@@ -149,6 +160,7 @@ export const useCajaStore = create<CajaState>()(
           inventarioInicial: inventario,
           inventarioSaldo:   {},
           cuadreCaja:        null,
+          borradorConteo:    null,
         });
 
         try {
@@ -181,6 +193,7 @@ export const useCajaStore = create<CajaState>()(
 
         set((s) => ({
           turno: s.turno ? { ...s.turno, estado: "CERRADO" as const } : null,
+          borradorConteo: null,
         }));
 
         if (turno) {
@@ -292,6 +305,41 @@ export const useCajaStore = create<CajaState>()(
       },
 
       guardarInventarioSaldo: (saldos) => set({ inventarioSaldo: saldos }),
+
+      // Guarda el avance del conteo (persistido) para sobrevivir a un refresco.
+      guardarBorradorConteo: (borrador) => set({ borradorConteo: borrador }),
+
+      // Reconcilia el turno local con el backend: corrige el id temporal que se
+      // asignó si el turno se abrió offline, y descarta un turno local "abierto"
+      // que el servidor ya no tiene como ABIERTO (cerrado desde otro dispositivo).
+      sincronizarTurnoActivo: async (pdvId) => {
+        try {
+          const res = await apiGet<{ data: TurnoApiResponse["data"] | null }>(
+            `/pos/turnos/activo?pdvId=${pdvId}`
+          );
+          const remoto = res.data;
+          const local  = get().turno;
+          if (!local || local.estado !== "ABIERTO") return;
+
+          if (remoto && remoto.pdvId === local.pdvId) {
+            // Alinear id/fecha/saldo con la fuente de verdad del servidor.
+            if (remoto.id !== local.id) {
+              set((s) => ({
+                turno: s.turno
+                  ? {
+                      ...s.turno,
+                      id:            remoto.id,
+                      fechaApertura: remoto.fechaApertura,
+                      saldoInicial:  remoto.saldoInicial,
+                    }
+                  : null,
+              }));
+            }
+          }
+        } catch {
+          /* sin red o error: se mantiene el estado local (offline-first) */
+        }
+      },
     }),
     { name: "nuts4you-caja" }
   )

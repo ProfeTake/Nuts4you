@@ -1,4 +1,5 @@
 import prisma from '../config/prisma'
+import { rangoFechaChile, rangoMesChile, fechaHaceNDiasChile } from '../lib/tiempoChile'
 
 // ─── PDVs ─────────────────────────────────────────────────────────────────────
 
@@ -56,30 +57,8 @@ export async function eliminarPDV(id: number) {
 }
 
 // ─── Helpers de fecha ─────────────────────────────────────────────────────────
-
-function rangoFechaChile(fecha: string): { inicio: Date; fin: Date } {
-  const inicio = new Date(`${fecha}T00:00:00-04:00`)
-  const fin    = new Date(`${fecha}T23:59:59.999-04:00`)
-  return { inicio, fin }
-}
-
-function rangoMesChile(mes: string): { inicio: Date; fin: Date; diasMes: number; diasTranscurridos: number } {
-  const [anio, mesNum] = mes.split('-').map(Number)
-  const diasMes = new Date(anio, mesNum, 0).getDate()
-  const inicio  = new Date(`${mes}-01T00:00:00-04:00`)
-  const fin     = new Date(`${mes}-${String(diasMes).padStart(2, '0')}T23:59:59.999-04:00`)
-
-  const ahora       = new Date()
-  const ahoraMes    = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}`
-  const diasTrab    = ahoraMes === mes ? ahora.getDate() : diasMes
-
-  return { inicio, fin, diasMes, diasTranscurridos: diasTrab }
-}
-
-function fechaHaceNDias(n: number, desde: Date): string {
-  const chileMs = desde.getTime() - n * 86_400_000 - 4 * 3_600_000
-  return new Date(chileMs).toISOString().split('T')[0]
-}
+// rangoFechaChile, rangoMesChile y fechaHaceNDiasChile viven en lib/tiempoChile
+// (DST-aware). Aquí solo queda el helper de etiqueta de día de semana.
 
 function diaSemana(fechaISO: string): string {
   const dias = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
@@ -145,19 +124,34 @@ export async function getResumenDiario(fecha: string) {
     }
   })
 
-  // 4. Ventas últimos 7 días (suma de total_calculado de turnos cerrados por día)
-  const hoyDate = new Date()
-  const ultimos7: { dia: string; fecha: string; monto: number }[] = []
-  for (let i = 6; i >= 0; i--) {
-    const fechaDia = fechaHaceNDias(i, hoyDate)
-    const { inicio: inicioD, fin: finD } = rangoFechaChile(fechaDia)
-    const turnosDiaI = await prisma.turnoCaja.findMany({
-      where:  { fecha_apertura: { gte: inicioD, lte: finD }, estado: 'CERRADO' },
-      select: { total_calculado: true },
-    })
-    const monto = turnosDiaI.reduce((s, t) => s + (t.total_calculado ?? 0), 0)
-    ultimos7.push({ dia: diaSemana(fechaDia), fecha: fechaDia, monto })
+  // 4. Ventas últimos 7 días — una sola query, agrupada en memoria por día chileno
+  //    (antes: 7 queries en loop = patrón N+1).
+  const fechasUltimos7 = Array.from({ length: 7 }, (_, k) => fechaHaceNDiasChile(6 - k))
+  const { inicio: inicio7 } = rangoFechaChile(fechasUltimos7[0])
+  const { fin: fin7 }       = rangoFechaChile(fechasUltimos7[6])
+
+  const turnos7 = await prisma.turnoCaja.findMany({
+    where:  { fecha_apertura: { gte: inicio7, lte: fin7 }, estado: 'CERRADO' },
+    select: { fecha_apertura: true, total_calculado: true },
+  })
+
+  // Mapa fecha-chilena → monto acumulado. El día chileno se obtiene formateando en TZ.
+  const fechaChilenaDe = (d: Date) =>
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(d)
+
+  const montoPorDia = new Map<string, number>(fechasUltimos7.map((f) => [f, 0]))
+  for (const t of turnos7) {
+    const dia = fechaChilenaDe(t.fecha_apertura)
+    if (montoPorDia.has(dia)) montoPorDia.set(dia, montoPorDia.get(dia)! + (t.total_calculado ?? 0))
   }
+
+  const ultimos7 = fechasUltimos7.map((fechaDia) => ({
+    dia:   diaSemana(fechaDia),
+    fecha: fechaDia,
+    monto: montoPorDia.get(fechaDia) ?? 0,
+  }))
 
   // 5. Depósitos pendientes
   const depositosPend = await prisma.deposito.aggregate({
@@ -373,19 +367,5 @@ export async function getHistorialTurnosSucursal(
 }
 
 // ─── Registro diario ──────────────────────────────────────────────────────────
-
-export async function guardarRegistroDiario(pdvId: number, fecha: string, datos: unknown) {
-  const fechaDate = new Date(`${fecha}T12:00:00Z`)
-  return prisma.registroDiario.upsert({
-    where:  { pdv_id_fecha: { pdv_id: pdvId, fecha: fechaDate } },
-    update: { datos: datos as never },
-    create: { pdv_id: pdvId, fecha: fechaDate, datos: datos as never },
-  })
-}
-
-export async function getRegistroDiario(pdvId: number, fecha: string) {
-  const fechaDate = new Date(`${fecha}T12:00:00Z`)
-  return prisma.registroDiario.findUnique({
-    where: { pdv_id_fecha: { pdv_id: pdvId, fecha: fechaDate } },
-  })
-}
+// Las funciones guardarRegistroDiario/getRegistroDiario viven en reporte.servicio.ts
+// (las rutas las importan de ahí). Aquí estaban duplicadas y se eliminaron.

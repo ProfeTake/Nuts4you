@@ -18,7 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatearCLP } from "@/lib/money";
 import type { SesionPOS, PaginaVendedor } from "@/tipos/pos.tipos";
-import { Menu, ChevronsLeft, User, Store, Clock, Archive, LayoutDashboard, LogOut, PackagePlus, ArrowLeft } from "lucide-react";
+import { Menu, ChevronsLeft, User, Store, Clock, Archive, LayoutDashboard, LogOut, PackagePlus, ArrowLeft, ClipboardList } from "lucide-react";
 import { PanelNotificaciones } from "./PanelNotificaciones";
 
 // ─── Contexto del menú ────────────────────────────────────────────────────
@@ -53,8 +53,9 @@ interface ItemNav {
 // Items del vendedor — se pueden filtrar o extender para otros roles
 
 const itemsVendedor: ItemNav[] = [
-  { id: "pos",         etiqueta: "Turno Activo", icono: <LayoutDashboard size={18} /> },
-  { id: "solicitudes", etiqueta: "Solicitudes",  icono: <PackagePlus size={18} /> },
+  { id: "pos",             etiqueta: "Turno Activo",    icono: <LayoutDashboard size={18} /> },
+  { id: "registro-diario", etiqueta: "Registro Diario", icono: <ClipboardList size={18} /> },
+  { id: "solicitudes",     etiqueta: "Solicitudes",     icono: <PackagePlus size={18} /> },
 ];
 
 // ─── Props ──────────────────────────────────────────────────────────────────

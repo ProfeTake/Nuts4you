@@ -16,6 +16,13 @@ router.get('/:pdvId',
       return
     }
 
+    // Scope de rol: un VENDEDOR solo puede consultar el inventario del PDV donde
+    // opera hoy (el pdvId resuelto en su token). ADMIN/SUPERVISOR/BODEGUERO ven cualquiera.
+    if (req.usuario!.rol === 'VENDEDOR' && req.usuario!.pdvId !== pdvId) {
+      res.status(403).json({ error: 'Acceso denegado' })
+      return
+    }
+
     try {
       const data = await getInventarioPDV(pdvId)
       res.json({ data })

@@ -14,10 +14,11 @@ export function autorizar(...rolesPermitidos: string[]) {
     }
 
     if (!rolesPermitidos.includes(req.usuario.rol)) {
-      res.status(403).json({
-        error: 'Sin permisos',
-        detalle: `Rol ${req.usuario.rol} no tiene acceso. Roles permitidos: ${rolesPermitidos.join(', ')}`,
-      })
+      // El detalle se loguea en servidor para debugging, sin exponer el mapa de roles al cliente.
+      console.warn(
+        `[autorizar] Rol ${req.usuario.rol} sin acceso a ${req.method} ${req.originalUrl}. Roles permitidos: ${rolesPermitidos.join(', ')}`,
+      )
+      res.status(403).json({ error: 'Acceso denegado' })
       return
     }
 

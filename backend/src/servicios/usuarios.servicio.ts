@@ -1,11 +1,14 @@
 import bcrypt from 'bcryptjs'
 import prisma from '../config/prisma'
 import type { CrearUsuarioInput, EditarUsuarioInput, EstadoUsuarioInput } from '../validaciones/usuarios.schema'
+import { enviarCredencialesUsuario } from './correo.servicio'
+import { usuarioIncludeConUltimoPdv } from './shared/usuario.query'
 
 function formatearUsuario(u: {
   id: number
   rut: string
   nombre: string
+  email: string | null
   activo: boolean
   pago_diario: number
   rol: { nombre: string }
@@ -18,6 +21,7 @@ function formatearUsuario(u: {
     id:           u.id,
     rut:          u.rut,
     nombre:       u.nombre,
+    email:        u.email,
     rol:          u.rol.nombre,
     pdvId:        pdvUltimoTurno?.id ?? u.pdv?.id ?? null,
     pdvNombre:    pdvUltimoTurno?.nombre ?? u.pdv?.nombre ?? null,
@@ -29,19 +33,7 @@ function formatearUsuario(u: {
 
 export async function getUsuarios() {
   const usuarios = await prisma.usuario.findMany({
-    include: {
-      rol: { select: { nombre: true } },
-      pdv: { select: { id: true, nombre: true } },
-      turnos: {
-        orderBy: { fecha_apertura: 'desc' },
-        take: 1,
-        select: {
-          id: true,
-          fecha_apertura: true,
-          pdv: { select: { id: true, nombre: true } },
-        },
-      },
-    },
+    include: usuarioIncludeConUltimoPdv,
     orderBy: [{ rol: { nombre: 'asc' } }, { nombre: 'asc' }],
   })
   return usuarios.map(formatearUsuario)
@@ -54,6 +46,10 @@ export async function crearUsuario(data: CrearUsuarioInput) {
   const existente = await prisma.usuario.findUnique({ where: { rut } })
   if (existente) throw new Error(`Ya existe un usuario con el RUT ${rut}`)
 
+  const email = data.email.trim().toLowerCase()
+  const emailEnUso = await prisma.usuario.findUnique({ where: { email } })
+  if (emailEnUso) throw new Error(`El correo ${email} ya está en uso por otro usuario`)
+
   const rolDb = await prisma.rol.findUnique({ where: { nombre: data.rol } })
   if (!rolDb) throw new Error(`Rol ${data.rol} no encontrado`)
 
@@ -63,19 +59,24 @@ export async function crearUsuario(data: CrearUsuarioInput) {
     data: {
       rut,
       nombre:        data.nombre,
+      email,
       password_hash: hash,
       rol_id:        rolDb.id,
       pdv_id:        data.pdvId ?? null,
       pago_diario:   data.pagoDiario,
     },
-    include: {
-      rol:   { select: { nombre: true } },
-      pdv:   { select: { id: true, nombre: true } },
-      turnos: { orderBy: { fecha_apertura: 'desc' }, take: 1, select: { id: true, fecha_apertura: true } },
-    },
+    include: usuarioIncludeConUltimoPdv,
   })
 
-  return formatearUsuario(usuario)
+  // Envía las credenciales por correo (RUT + contraseña en texto, única vez).
+  // No bloquea la creación: si SMTP no está configurado o falla, se informa en la respuesta.
+  const correoEnviado = await enviarCredencialesUsuario(
+    { nombre: usuario.nombre, correo: email },
+    rut,
+    data.password,
+  )
+
+  return { ...formatearUsuario(usuario), correoEnviado }
 }
 
 export async function editarUsuario(id: number, data: EditarUsuarioInput) {
@@ -88,6 +89,12 @@ export async function editarUsuario(id: number, data: EditarUsuarioInput) {
     updateData.rut = rut
   }
   if (data.nombre)   updateData.nombre    = data.nombre
+  if (data.email) {
+    const email = data.email.trim().toLowerCase()
+    const emailEnUso = await prisma.usuario.findUnique({ where: { email } })
+    if (emailEnUso && emailEnUso.id !== id) throw new Error(`El correo ${email} ya está en uso por otro usuario`)
+    updateData.email = email
+  }
   if (data.password) updateData.password_hash = await bcrypt.hash(data.password, 10)
   if (data.pdvId !== undefined) updateData.pdv_id = data.pdvId
   if (data.pagoDiario !== undefined) updateData.pago_diario = data.pagoDiario
@@ -100,11 +107,7 @@ export async function editarUsuario(id: number, data: EditarUsuarioInput) {
   const usuario = await prisma.usuario.update({
     where: { id },
     data:  updateData,
-    include: {
-      rol:   { select: { nombre: true } },
-      pdv:   { select: { id: true, nombre: true } },
-      turnos: { orderBy: { fecha_apertura: 'desc' }, take: 1, select: { id: true, fecha_apertura: true } },
-    },
+    include: usuarioIncludeConUltimoPdv,
   })
 
   return formatearUsuario(usuario)
@@ -114,11 +117,7 @@ export async function cambiarEstadoUsuario(id: number, data: EstadoUsuarioInput)
   const usuario = await prisma.usuario.update({
     where: { id },
     data:  { activo: data.activo },
-    include: {
-      rol:   { select: { nombre: true } },
-      pdv:   { select: { id: true, nombre: true } },
-      turnos: { orderBy: { fecha_apertura: 'desc' }, take: 1, select: { id: true, fecha_apertura: true } },
-    },
+    include: usuarioIncludeConUltimoPdv,
   })
   return formatearUsuario(usuario)
 }
@@ -131,14 +130,16 @@ export async function eliminarUsuario(id: number, solicitanteId: number) {
     include: { rol: { select: { nombre: true } } },
   })
 
-  if (usuario.rol.nombre === 'ADMIN') {
-    const totalAdmins = await prisma.usuario.count({
-      where: { rol: { nombre: 'ADMIN' }, activo: true },
-    })
-    if (totalAdmins <= 1) throw new Error('No se puede eliminar el único administrador activo del sistema')
-  }
-
   await prisma.$transaction(async (tx) => {
+    // El conteo de admins va dentro de la transacción para evitar una race condition:
+    // dos eliminaciones simultáneas no deben poder dejar al sistema sin administrador.
+    if (usuario.rol.nombre === 'ADMIN') {
+      const totalAdmins = await tx.usuario.count({
+        where: { rol: { nombre: 'ADMIN' }, activo: true },
+      })
+      if (totalAdmins <= 1) throw new Error('No se puede eliminar el único administrador activo del sistema')
+    }
+
     // Desvincula el usuario de los registros históricos (se conservan)
     await tx.turnoCaja.updateMany({
       where: { usuario_id: id },

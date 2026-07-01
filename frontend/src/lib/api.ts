@@ -30,6 +30,16 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
     ...rest,
   })
 
+  // Token expirado o inválido: limpiar sesión y redirigir al login en vez de
+  // dejar la UI en un estado roto con un error críptico.
+  if (response.status === 401 && token) {
+    localStorage.removeItem('token')
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+    throw new Error('Sesión expirada. Vuelve a iniciar sesión.')
+  }
+
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Error de conexión' }))
     throw new Error(error.error ?? `Error ${response.status}`)

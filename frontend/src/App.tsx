@@ -7,6 +7,7 @@ import Login from "@/paginas/Login";
 import AperturaTurno from "@/paginas/AperturaTurno";
 import POSDashboard from "@/paginas/POSDashboard";
 import SolicitudesPDV from "@/paginas/SolicitudesPDV";
+import { ReporteDiarioSucursal } from "@/componentes/admin/ReporteDiarioSucursal";
 
 // Admin
 import {
@@ -66,6 +67,7 @@ function LayoutPOS({ usuario, pdv, horaIngreso, onCerrarSesion, onVolverAdmin }:
       <Routes>
         <Route index element={<POSDashboard />} />
         <Route path="solicitudes" element={<SolicitudesPDV />} />
+        <Route path="registro-diario" element={<ReporteDiarioSucursal />} />
       </Routes>
     </BarraLateral>
   );

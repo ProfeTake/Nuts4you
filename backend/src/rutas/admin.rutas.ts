@@ -187,13 +187,23 @@ router.get('/vendedores/:id/faltantes',
   }
 )
 
+const registroDiarioSchema = z.object({
+  pdvId: z.number().int().positive(),
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato YYYY-MM-DD requerido'),
+  datos: z.record(z.string(), z.unknown()),
+})
+
 /** POST /api/admin/registro-diario */
 router.post('/registro-diario',
   autenticar,
   autorizar('ADMIN', 'SUPERVISOR', 'VENDEDOR'),
   async (req, res, next) => {
-    const { pdvId, fecha, datos } = req.body as { pdvId: number; fecha: string; datos: unknown }
-    if (!pdvId || !fecha) { res.status(400).json({ error: 'Se requieren pdvId y fecha' }); return }
+    const parsed = registroDiarioSchema.safeParse(req.body)
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Datos inválidos', detalle: parsed.error.flatten() })
+      return
+    }
+    const { pdvId, fecha, datos } = parsed.data
     try {
       const result = await guardarRegistroDiario(pdvId, fecha, datos)
       res.json({ data: result })

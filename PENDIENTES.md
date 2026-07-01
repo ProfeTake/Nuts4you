@@ -127,43 +127,59 @@ _Última actualización: 2026-05-26_
 ### P4 — RegistroDiario sin integración real
 **Estado actual:** La tabla `RegistroDiario` tiene 0 registros. El código del reporte diario existe (`reporte.servicio.ts`) pero no hay evidencia de que se esté guardando data real desde el frontend.
 
-**Lo que falta:**
-- [ ] Revisar si `ReporteDiarioSucursal.tsx` está activo en alguna ruta del admin
-- [ ] Decidir si mantener como JSON blob o estructurar como tabla normalizada
-- [ ] Si se mantiene: conectar al cierre de caja para generar el registro automáticamente al cerrar turno
+**Hallazgo (revisado 2026-06-15):**
+- `ReporteDiarioSucursal.tsx` **está completamente cableado a la API** (`apiGet`/`apiPost` a `/admin/registro-diario`), pero **NO está montado** como ruta en `App.tsx` (rutas POS solo tienen `index` y `solicitudes`) ni aparece en el menú visible (`itemsVendedor`). Es UI huérfana.
+- El backend ya valida el payload con Zod (`registroDiarioSchema`, hecho en esta sesión).
+- Funciones `guardarRegistroDiario`/`getRegistroDiario` están duplicadas en `admin.servicio.ts` (código muerto) y `reporte.servicio.ts` (el que usan las rutas).
+
+**Decisión pendiente (producto):**
+- [ ] ¿Exponer el formulario montando la ruta `/pos/registro-diario` + ítem en menú? (el componente ya funciona)  — **o** —
+- [ ] ¿Eliminar el componente por estar reemplazado por el flujo stock-flow (POSDashboard + cierre de caja)?
+- [ ] Limpiar las funciones duplicadas en `admin.servicio.ts`.
 
 ---
 
 ## 🟠 PENDIENTES IMPORTANTES (mejoran confiabilidad)
 
-### P5 — POSDashboard sin conexión completa a backend
-**Estado actual:** El turno se abre/cierra via API, pero el estado intermedio (stock ingresado, mezclas cocinadas, saldo) persiste solo en Zustand. Si el navegador se cierra a mitad de turno, se pierde el estado.
+### ✅ P5 — POSDashboard: persistencia del conteo + sync de turno (COMPLETADO 2026-06-15)
+**Estado anterior:** El estado intermedio (stock ingresado, mezclas cocinadas, saldo) persistía solo en `useState` local. Si el navegador se cerraba a mitad de turno, se perdía el avance del conteo.
 
-**Lo que falta:**
-- [ ] Al abrir el POSDashboard: cargar datos del turno activo desde `GET /api/pos/turnos/activo`
-- [ ] Al cerrar turno: enviar gastos y movimientos antes del `PATCH /api/pos/turnos/:id/cerrar`
-- [ ] Reemplazar `useState` locales por `useQuery` + `useMutation` de TanStack Query
+**Realizado:**
+- [x] **Borrador de conteo persistido**: `cocinadasHoy` y `stockActual` se guardan en el store Zustand persistido (`borradorConteo`). Al refrescar, el POSDashboard reinicia el conteo desde el borrador. Se limpia al abrir/cerrar turno.
+- [x] **Sincronización de turno con backend**: al montar, `sincronizarTurnoActivo(pdvId)` consulta `GET /api/pos/turnos/activo` y reconcilia el id local con el del servidor (corrige el id temporal de una apertura offline).
+- [x] Gastos ya se persistían en BD y se cargan al montar (P1). Cierre envía el payload vía `PATCH /api/pos/turnos/:id/cerrar`.
 
----
-
-### P6 — Bonos configurables (hoy hardcoded)
-**Estado actual:** Los umbrales de bonos están en `calculos.servicio.ts` como constante en código.
-
-**Lo que falta:**
-- [ ] Tabla `ConfigBono` en BD: `pdv_id`, `umbral_venta`, `monto_bono`, `activo`
-- [ ] Admin puede editar umbrales desde panel (sin tocar código)
-- [ ] `calcularBono` lee desde BD en lugar de constante
+**Nota de diseño:** Los inputs de conteo se mantienen como estado de formulario (no se convierten a `useQuery`, que es para server-state). La persistencia se resuelve en el store, que es el patrón correcto aquí.
 
 ---
 
-### P7 — Producción Railway
-**Estado actual:** El sistema corre en desarrollo local. Railway tiene la infraestructura pero las variables de entorno de producción no están configuradas.
+### ✅ P6 — Bonos configurables (COMPLETADO 2026-06-15)
+**Estado anterior:** Los umbrales de bonos estaban en `calculos.servicio.ts` como constante en código (acoplados al nombre exacto del PDV).
 
-**Lo que falta:**
-- [ ] Variables de entorno en Railway: `DATABASE_URL` (ya provisto por plugin MySQL), `JWT_SECRET`, `VITE_API_URL`
-- [ ] Verificar que `railway.toml` del backend y Dockerfile del frontend estén actualizados post-normalización
-- [ ] Generar `prisma migrate` formal para `migrate deploy` en producción (actualmente solo `db push`)
-- [ ] Probar flujo completo en entorno Railway antes de entregar al cliente
+**Realizado:**
+- [x] Tabla `ConfigBono` en BD: `pdv_id`, `umbral_venta`, `monto_bono`, `activo` (+ migración `20260615130000_add_config_bono` con seed inicial de los tramos por nombre de PDV).
+- [x] Admin edita umbrales desde panel: nueva pestaña **Bonos** en RRHH (`ConfigBonos.tsx`), CRUD vía `GET /api/config-bonos` y `PUT /api/config-bonos/:pdvId`.
+- [x] `calcularBono(tramos, venta)` ahora es función pura que recibe los tramos; `getNomina` los carga desde BD (`configBono.servicio.ts`) con fallback a `TABLA_BONOS` por nombre si un PDV no tiene config.
+- [x] Seed actualizado (`seed.ts`) siembra `ConfigBono` para BD nuevas.
+
+**⚠️ Pendiente operativo:** aplicar la migración en producción con `npx prisma migrate deploy` (la BD local XAMPP no estaba corriendo, la migración quedó creada lista para aplicar).
+
+---
+
+### ✅ P7 — Producción Railway (COMPLETADO 2026-06-15)
+**Estado:** Sistema desplegado y operativo en Railway. Proyecto `satisfied-emotion` con 3 servicios: Backend, Nuts4you (frontend) y MySQL — todos Online.
+
+**Realizado:**
+- [x] Servicio **Backend** creado y conectado a GitHub (`ProfeTake/Nuts4you`, branch `main`, Root Directory = `backend`) → `https://backend-production-5e7c.up.railway.app`
+- [x] Frontend (servicio `Nuts4you`) → `https://nuts4you-production.up.railway.app`
+- [x] Variables backend: `DATABASE_URL=${{MySQL.MYSQL_URL}}` (red privada), `JWT_SECRET`, `JWT_EXPIRACION`, `FRONTEND_URL`, `NODE_ENV=production`
+- [x] Variable frontend: `VITE_API_URL=<backend>` + fix en `frontend/Dockerfile` (ARG/ENV VITE_API_URL para que Vite la hornee en build)
+- [x] Migraciones formales aplicadas en prod (`migrate deploy`) + migración `sync_schema_drift` que cubría el drift de `db push` (`codigo_barra`, nullables)
+- [x] Seed ejecutado en prod (roles, 6 sucursales, 15 productos, inventario bodega, 9 usuarios)
+- [x] Login verificado end-to-end en producción (admin RUT `11111111-1`)
+
+**Pendiente menor:**
+- [ ] Rotar el token de GitHub que estaba incrustado en el remoto de git (`ghp_...`)
 
 ---
 
@@ -172,7 +188,7 @@ _Última actualización: 2026-05-26_
 - [ ] **Buffer offline POS** — ventas/gastos en `localStorage` si no hay red, sincronizar al reconectar. Crítico para sucursales con internet intermitente.
 - [ ] **Validaciones Zod en frontend** — formularios de apertura y cierre de caja sin validación client-side
 - [ ] **Campo `teléfono`** en modelo Usuario — migración requerida
-- [ ] **Tabla `ConfigBono`** configurable por admin (ver P6)
+- [x] **Tabla `ConfigBono`** configurable por admin (ver P6 — COMPLETADO 2026-06-15)
 - [ ] **Tests de integración** — flujo login → apertura → cierre → reabrir
 - [ ] **Importar Horarios con Excel de Sueldos** — el Excel "Sueldos Feb 2026.xlsx" tiene historial de turnos por sucursal; potencial fuente de datos históricos
 - [ ] **Módulo de Horarios planificados** — calendario anual 2026 completo desde admin (el Excel ya está importado)
@@ -186,8 +202,9 @@ _Última actualización: 2026-05-26_
 |---|---|---|---|---|
 | Auth / Login | ✅ | ✅ | ✅ | Operativo |
 | POS - Apertura turno | ✅ | ✅ | ✅ | Operativo |
-| POS - Dashboard (stock) | ✅ | ⚠️ parcial | ⚠️ gastos/retiros sin persistir | **Incompleto** |
-| POS - Cierre de caja | ✅ | ✅ | ⚠️ gastos no guardados | **Incompleto** |
+| POS - Dashboard (stock) | ✅ | ✅ | ✅ gastos persistidos + borrador de conteo | Operativo |
+| POS - Cierre de caja | ✅ | ✅ | ✅ | Operativo |
+| POS - Registro Diario | ✅ | ✅ | ✅ (ruta montada P4) | Operativo |
 | POS - Solicitudes | ✅ | ✅ | ✅ | Revisar end-to-end |
 | Admin - Dashboard | ✅ | ✅ | ✅ | Operativo |
 | Admin - Sucursales (PDV) | ✅ | ✅ | ✅ | Operativo |

@@ -6,7 +6,7 @@
 //   POST /api/bodega/despachos  → registrar el traspaso
 //   GET  /api/bodega/despachos  → historial de traspasos
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Loader2, Truck, History, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
@@ -34,14 +34,6 @@ interface ItemStock {
   stockActual:  number;
 }
 
-interface ItemDespacho {
-  productoId:  number;
-  nombre:      string;
-  categoria:   string;
-  stockActual: number;
-  cantidad:    string; // texto del input
-}
-
 interface HistorialItem {
   id:       number;
   producto: string;
@@ -56,7 +48,10 @@ interface HistorialItem {
 export function FormularioDespacho() {
   const queryClient = useQueryClient();
   const [pdvDestinoId, setPdvDestinoId] = useState<string>("");
-  const [items, setItems]               = useState<ItemDespacho[]>([]);
+  // Cantidades a despachar indexadas por inventarioId (identidad única por fila de
+  // stock). Las filas se derivan siempre del stock fresco; aquí solo viven las
+  // cantidades escritas. Así dos filas nunca se "contagian" el valor.
+  const [cantidades, setCantidades]     = useState<Record<number, string>>({});
   const [mostrarHistorial, setMostrarHistorial] = useState(false);
 
   // ── Carga de datos ────────────────────────────────────────────────────────
@@ -66,10 +61,22 @@ export function FormularioDespacho() {
     queryFn:  () => apiGet<{ data: PDVItem[] }>("/admin/pdvs").then((r) => r.data),
   });
 
+  // Query propio (key distinto) para no colisionar con el inventario, que comparte
+  // el endpoint pero transforma los datos a otra forma. La invalidación por prefijo
+  // de ["bodega","stock"] sigue refrescando este query tras guardar/despachar.
   const { data: stock = [], isLoading: cargandoStock } = useQuery({
-    queryKey: ["bodega", "stock"],
+    queryKey: ["bodega", "stock", "despacho"],
     queryFn:  () =>
-      apiGet<{ data: ItemStock[] }>("/bodega/stock").then((r) => r.data),
+      apiGet<{ data: ItemStock[] }>("/bodega/stock").then((r) =>
+        // Normaliza por si el backend omite algún campo (evita NaN/blank en la UI)
+        r.data.map((s) => ({
+          inventarioId: s.inventarioId,
+          productoId:   s.productoId,
+          nombre:       s.nombre ?? "—",
+          categoria:    s.categoria ?? "Otros",
+          stockActual:  Number(s.stockActual) || 0,
+        }))
+      ),
   });
 
   const { data: historial = [], isLoading: cargandoHistorial } = useQuery({
@@ -78,22 +85,6 @@ export function FormularioDespacho() {
       apiGet<{ data: HistorialItem[] }>("/bodega/despachos").then((r) => r.data),
     enabled: mostrarHistorial,
   });
-
-  // Inicializa items cuando cambia el stock
-  useMemo(() => {
-    if (stock.length > 0 && items.length === 0) {
-      setItems(
-        stock.map((s) => ({
-          productoId:  s.productoId,
-          nombre:      s.nombre,
-          categoria:   s.categoria,
-          stockActual: s.stockActual,
-          cantidad:    "",
-        }))
-      );
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stock]);
 
   // ── Mutación ──────────────────────────────────────────────────────────────
 
@@ -105,7 +96,7 @@ export function FormularioDespacho() {
         description: `Enviado a ${res.data.destino}`,
       });
       // Limpiar cantidades
-      setItems((prev) => prev.map((i) => ({ ...i, cantidad: "" })));
+      setCantidades({});
       setPdvDestinoId("");
       // Refrescar stock y historial
       queryClient.invalidateQueries({ queryKey: ["bodega", "stock"] });
@@ -119,19 +110,16 @@ export function FormularioDespacho() {
 
   // ── Handlers ─────────────────────────────────────────────────────────────
 
-  const setCantidad = (productoId: number, valor: string) => {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.productoId === productoId ? { ...i, cantidad: valor.replace(/\D/g, "") } : i
-      )
-    );
+  const setCantidad = (inventarioId: number, valor: string) => {
+    setCantidades((prev) => ({ ...prev, [inventarioId]: valor.replace(/\D/g, "") }));
   };
 
-  const itemsConCantidad = items.filter((i) => parseInt(i.cantidad, 10) > 0);
+  // Filas con cantidad > 0, derivadas del stock fresco + el mapa de cantidades.
+  const itemsConCantidad = stock
+    .map((s) => ({ ...s, cantidad: parseInt(cantidades[s.inventarioId] ?? "", 10) || 0 }))
+    .filter((s) => s.cantidad > 0);
 
-  const erroresStock = itemsConCantidad.filter(
-    (i) => parseInt(i.cantidad, 10) > i.stockActual
-  );
+  const erroresStock = itemsConCantidad.filter((i) => i.cantidad > i.stockActual);
 
   const puedeEnviar =
     !!pdvDestinoId &&
@@ -145,14 +133,14 @@ export function FormularioDespacho() {
       pdvDestinoId: parseInt(pdvDestinoId, 10),
       items: itemsConCantidad.map((i) => ({
         productoId: i.productoId,
-        cantidad:   parseInt(i.cantidad, 10),
+        cantidad:   i.cantidad,
       })),
     });
   };
 
   // ── Agrupar items por categoría ───────────────────────────────────────────
 
-  const categorias = [...new Set(items.map((i) => i.categoria))];
+  const categorias = [...new Set(stock.map((s) => s.categoria))];
 
   const cargando = cargandoPdvs || cargandoStock;
 
@@ -203,7 +191,7 @@ export function FormularioDespacho() {
       {/* ── Tabla de items ── */}
       <div className="space-y-4">
         {categorias.map((cat) => {
-          const grupo = items.filter((i) => i.categoria === cat);
+          const grupo = stock.filter((s) => s.categoria === cat);
           return (
             <div key={cat} className="rounded-xl border overflow-hidden">
               <div className="bg-muted px-4 py-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
@@ -211,15 +199,17 @@ export function FormularioDespacho() {
               </div>
               <div className="divide-y">
                 {grupo.map((item) => {
-                  const cant      = parseInt(item.cantidad, 10) || 0;
+                  const cantStr   = cantidades[item.inventarioId] ?? "";
+                  const cant      = parseInt(cantStr, 10) || 0;
+                  const sinStock  = item.stockActual <= 0;
                   const excede    = cant > item.stockActual;
                   const hayCant   = cant > 0;
 
                   return (
                     <div
-                      key={item.productoId}
+                      key={item.inventarioId}
                       className={`flex items-center justify-between gap-3 px-4 py-3 ${
-                        excede ? "bg-red-50/60 dark:bg-red-950/10" : ""
+                        excede ? "bg-red-50/60 dark:bg-red-950/10" : sinStock ? "opacity-60" : ""
                       }`}
                     >
                       <div className="flex-1 min-w-0">
@@ -228,7 +218,10 @@ export function FormularioDespacho() {
                         </p>
                         <p className="text-xs text-muted-foreground">
                           Stock bodega: <span className="font-medium tabular-nums">{item.stockActual}</span>
-                          {hayCant && !excede && (
+                          {sinStock && (
+                            <span className="ml-2 text-muted-foreground font-medium">— sin stock para despachar</span>
+                          )}
+                          {!sinStock && hayCant && !excede && (
                             <span className="ml-2 text-emerald-600 font-medium">
                               → quedan {item.stockActual - cant}
                             </span>
@@ -244,8 +237,9 @@ export function FormularioDespacho() {
                         type="text"
                         inputMode="numeric"
                         placeholder="0"
-                        value={item.cantidad}
-                        onChange={(e) => setCantidad(item.productoId, e.target.value)}
+                        value={cantStr}
+                        disabled={sinStock}
+                        onChange={(e) => setCantidad(item.inventarioId, e.target.value)}
                         className={`w-20 text-center font-semibold tabular-nums ${
                           excede ? "border-destructive focus-visible:ring-destructive" : ""
                         }`}
@@ -266,7 +260,7 @@ export function FormularioDespacho() {
             Resumen del despacho
           </p>
           {itemsConCantidad.map((i) => (
-            <div key={i.productoId} className="flex items-center justify-between text-sm">
+            <div key={i.inventarioId} className="flex items-center justify-between text-sm">
               <span className="text-foreground">{i.nombre}</span>
               <Badge variant="secondary" className="tabular-nums font-semibold">
                 {i.cantidad} unid.
