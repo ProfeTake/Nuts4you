@@ -15,9 +15,24 @@ export const ajustarStockSchema = z.object({
   stockActual:  z.number().int().min(0),
   stockCritico: z.number().int().min(0),
   nombre:       z.string().min(1).max(200).optional(),
+  // Precio de venta: solo lo aplica el servicio si el usuario es ADMIN y el
+  // producto pertenece a una categoría de venta (Paquetes/Líquidos/Conos).
+  precioVenta:  z.number().int().min(0).optional(),
+  // Costo: solo ADMIN, cualquier categoría (las mezclas también tienen costo).
+  // Antes era de solo-escritura al crear el producto (C7/A42).
+  costo:        z.number().int().min(0).optional(),
 })
 
 export type AjustarStockInput = z.infer<typeof ajustarStockSchema>
+
+// Merma explícita (C6/A40): baja de stock con causa propia, distinta de un
+// ajuste genérico — queda como MovimientoInv tipo MERMA + HistorialInventario.
+export const mermaSchema = z.object({
+  cantidad: z.number().int().positive(),
+  motivo:   z.string().min(1).max(200).trim(),
+})
+
+export type MermaInput = z.infer<typeof mermaSchema>
 
 // Guardado por lote desde la tabla editable de inventario.
 // Cada ítem aporta los ingresos/utilizadas del momento; el servidor calcula el saldo nuevo.

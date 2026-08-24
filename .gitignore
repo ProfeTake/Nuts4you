@@ -19,3 +19,6 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 .idea/
+
+# ─── Archivos de bloqueo de Office ───────────────────────────────────────────
+~$*

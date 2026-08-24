@@ -1,0 +1,47 @@
+# .claudeignore — archivos/carpetas que Claude no necesita escanear.
+# Reduce ruido y ahorra tokens al buscar/leer. Mantener en sync con la
+# sección "Files & folders to ignore" de CLAUDE.md.
+# (Claude Code también respeta .gitignore, que ya excluye node_modules/dist/build.)
+
+# ─── Dependencias ────────────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+
+# ─── Salidas de build ────────────────────────────────────────────────────────
+dist/
+build/
+**/dist/
+**/build/
+*.tsbuildinfo
+
+# ─── Cobertura de tests ──────────────────────────────────────────────────────
+coverage/
+**/coverage/
+
+# ─── Assets binarios (imágenes, fuentes, iconos) ─────────────────────────────
+frontend/public/
+**/public/
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.svg
+**/*.ico
+**/*.webp
+**/*.woff
+**/*.woff2
+**/*.ttf
+**/*.eot
+
+# ─── Lockfiles ───────────────────────────────────────────────────────────────
+package-lock.json
+**/package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ─── Historial de migraciones Prisma (usar schema.prisma como fuente) ────────
+backend/prisma/migrations/
+
+# ─── Secretos / entorno ──────────────────────────────────────────────────────
+.env
+.env.*

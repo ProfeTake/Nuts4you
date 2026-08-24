@@ -1,4 +1,5 @@
 import prisma from '../config/prisma'
+import { ErrorApp } from '../lib/errores'
 import type { ActualizarDepositoInput } from '../validaciones/finanzas.schema'
 
 // Mapa estado DB → label frontend
@@ -31,7 +32,12 @@ export async function getDepositos() {
   })
 
   return depositos.map((d) => {
-    const falta = Math.max(0, d.monto_teorico - d.monto_real)
+    // Lo que realmente debe llegar al banco: el efectivo del cierre MENOS lo que
+    // se le pagó al vendedor con esa misma plata (planilla: "A DEPOSITAR" ya
+    // viene neteado por la celda F29 "Pagado a Vendedor"). Puede quedar negativo
+    // si se pagó más de lo que recaudó el turno; se muestra tal cual.
+    const aDepositar = d.monto_teorico - d.pago_vendedor
+    const falta = Math.max(0, aDepositar - d.monto_real)
     return {
       id:             d.id,
       turnoId:        d.turno_id,
@@ -41,25 +47,33 @@ export async function getDepositos() {
       sucursal:       PDV_A_SUCURSAL[d.turno.pdv.nombre] ?? d.turno.pdv.nombre,
       sucursalNombre: d.turno.pdv.nombre,
       vendedor:       d.turno.usuario?.nombre ?? 'Usuario eliminado',
-      montoADepositar: d.monto_teorico,
+      montoADepositar: aDepositar,
       montoDepositado: d.monto_real,
       faltaDepositar:  falta,
+      // Bruto y descuento por separado para poder explicar por qué bajó el neto.
+      montoBruto:      d.monto_teorico,
+      pagoVendedor:    d.pago_vendedor,
       estado:          ESTADO_LABEL[d.estado] ?? d.estado,
     }
   })
 }
 
 export async function actualizarDeposito(id: number, data: ActualizarDepositoInput) {
-  const deposito = await prisma.deposito.findUniqueOrThrow({ where: { id } })
+  await prisma.deposito.findUniqueOrThrow({ where: { id } })
 
-  const montoReal = data.montoReal ?? deposito.monto_teorico
+  // El monto realmente depositado debe declararse siempre: antes, si el frontend
+  // no lo enviaba, se copiaba el monto teórico como si fuera el real y
+  // `faltaDepositar` caía a 0 sin verificar cuánto llegó al banco (C9).
+  if (data.montoReal === undefined) {
+    throw new ErrorApp('Debe indicar el monto realmente depositado', 400)
+  }
 
   await prisma.deposito.update({
     where: { id },
     data: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       estado:     data.estado as any,
-      monto_real: montoReal,
+      monto_real: data.montoReal,
       fecha:      new Date(),
     },
   })

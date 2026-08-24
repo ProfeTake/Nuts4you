@@ -1,4 +1,5 @@
 import prisma from '../config/prisma'
+import { ErrorApp, noEncontrado } from '../lib/errores'
 import { TABLA_BONOS, type TramoBonoItem } from './calculos.servicio'
 
 // ─── Lectura para cálculo de nómina ──────────────────────────────────────────
@@ -21,18 +22,46 @@ export async function getTramosBonoActivosPorPdv(): Promise<Map<number, TramoBon
 /**
  * Tramos a usar para un PDV: los de BD si existen, si no el fallback por nombre
  * (TABLA_BONOS). Evita que un PDV sin configuración rompa el cálculo.
+ *
+ * ⚠️ El fallback depende del nombre EXACTO del PDV: si el admin lo renombra y
+ * no tiene tramos en ConfigBono, el bono sería 0. Por eso se deja rastro en el
+ * log cada vez que un PDV cae al fallback o queda sin tramos.
  */
 export function tramosParaPdv(
   mapa: Map<number, TramoBonoItem[]>,
   pdvId: number,
   pdvNombre: string,
 ): TramoBonoItem[] {
-  return mapa.get(pdvId) ?? TABLA_BONOS[pdvNombre] ?? []
+  const deBD = mapa.get(pdvId)
+  if (deBD) return deBD
+
+  const fallback = TABLA_BONOS[pdvNombre]
+  if (fallback) {
+    console.warn(
+      `[bonos] PDV #${pdvId} "${pdvNombre}" sin tramos en ConfigBono: usando fallback por nombre. ` +
+      `Configura sus tramos en el panel de bonos para no depender del nombre.`,
+    )
+    return fallback
+  }
+
+  console.warn(
+    `[bonos] PDV #${pdvId} "${pdvNombre}" sin tramos en ConfigBono ni fallback por nombre: bono = 0. ` +
+    `Configura sus tramos en el panel de bonos.`,
+  )
+  return []
 }
 
 // ─── CRUD para el panel admin ─────────────────────────────────────────────────
 
-/** Lista la configuración de bonos agrupada por PDV (solo puntos de venta). */
+/**
+ * Lista la configuración de bonos agrupada por PDV (solo puntos de venta).
+ *
+ * Cuando un PDV no tiene filas en ConfigBono devuelve los tramos del fallback
+ * (TABLA_BONOS, los de la planilla del cliente) con `origen: 'planilla'`, porque
+ * son los que el cálculo está usando de verdad — ver tramosParaPdv(). Mostrar la
+ * lista vacía hacía creer al admin que ese punto no pagaba bonos mientras el
+ * sistema sí los pagaba. Guardar desde el panel los materializa en la BD.
+ */
 export async function getConfigBonos() {
   const pdvs = await prisma.pDV.findMany({
     where:   { tipo: 'PUNTO_VENTA' },
@@ -46,17 +75,34 @@ export async function getConfigBonos() {
     orderBy: { nombre: 'asc' },
   })
 
-  return pdvs.map((p) => ({
-    pdvId:     p.id,
-    pdvNombre: p.nombre,
-    activo:    p.activo,
-    tramos: p.config_bonos.map((t) => ({
-      id:     t.id,
-      umbral: t.umbral_venta,
-      monto:  t.monto_bono,
-      activo: t.activo,
-    })),
-  }))
+  return pdvs.map((p) => {
+    if (p.config_bonos.length > 0) {
+      return {
+        pdvId:     p.id,
+        pdvNombre: p.nombre,
+        activo:    p.activo,
+        origen:    'configurado' as const,
+        tramos: p.config_bonos.map((t) => ({
+          id:     t.id,
+          umbral: t.umbral_venta,
+          monto:  t.monto_bono,
+          activo: t.activo,
+        })),
+      }
+    }
+
+    const fallback = TABLA_BONOS[p.nombre] ?? []
+    return {
+      pdvId:     p.id,
+      pdvNombre: p.nombre,
+      activo:    p.activo,
+      // 'planilla' = viene del fallback por nombre; 'sin-configurar' = bono 0.
+      origen:    fallback.length > 0 ? ('planilla' as const) : ('sin-configurar' as const),
+      tramos: [...fallback]
+        .sort((a, b) => b.umbral - a.umbral)
+        .map((t) => ({ id: undefined, umbral: t.umbral, monto: t.bono, activo: true })),
+    }
+  })
 }
 
 /**
@@ -68,12 +114,12 @@ export async function guardarTramosPdv(
   tramos: Array<{ umbral: number; monto: number }>,
 ) {
   const pdv = await prisma.pDV.findUnique({ where: { id: pdvId } })
-  if (!pdv) throw new Error('Punto de venta no encontrado')
+  if (!pdv) throw noEncontrado('Punto de venta')
 
   // Rechazar umbrales duplicados (el @@unique lo haría, pero damos mejor mensaje).
   const umbrales = tramos.map((t) => t.umbral)
   if (new Set(umbrales).size !== umbrales.length) {
-    throw new Error('No puede haber dos tramos con el mismo umbral de venta')
+    throw new ErrorApp('No puede haber dos tramos con el mismo umbral de venta')
   }
 
   await prisma.$transaction(async (tx) => {

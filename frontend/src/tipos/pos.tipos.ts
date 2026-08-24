@@ -56,7 +56,7 @@ export interface EstadoAuth {
 // ─── Navegación ─────────────────────────────────────────────────────────────
 
 // Páginas disponibles en el SideNav del vendedor
-export type PaginaVendedor = "pos" | "solicitudes" | "inventario" | "historial" | "cierre-caja" | "registro-diario";
+export type PaginaVendedor = "pos" | "solicitudes" | "mis-cierres" | "inventario" | "historial" | "cierre-caja";
 
 // ─── Apertura de turno ──────────────────────────────────────────────────────
 
@@ -132,17 +132,43 @@ export interface MovimientoCaja {
   categoria: string;
   monto: number;
   hora: string; // "HH:MM"
+  /**
+   * El movimiento lo creó otra persona (hoy: los retiros que registra el
+   * admin/supervisor desde el panel). El vendedor lo ve en su cuadre pero no
+   * puede editarlo ni borrarlo.
+   */
+  soloLectura?: boolean;
+  /** Quién lo registró — se muestra junto a los retiros del admin. */
+  realizadoPor?: string;
 }
 
 // ─── Solicitudes de insumos ─────────────────────────────────────────────────
 
-export type EstadoSolicitud = "PENDIENTE" | "DESPACHADA" | "CONFIRMADA";
+export type EstadoSolicitud = "PENDIENTE" | "DESPACHADA" | "CONFIRMADA" | "RECHAZADA";
 
 export interface ItemSolicitud {
   id: number;
+  /** Producto pedido — el despacho se declara por producto, no por línea. */
+  productoId: number;
   producto: string;
   categoria: string;
   cantidad: number;
+}
+
+/**
+ * Despacho que movió stock para esta solicitud (A15). Como el bodeguero puede
+ * enviar menos de lo pedido, `items` es lo que realmente salió de bodega,
+ * mientras `Solicitud.items` conserva el pedido original.
+ */
+export interface DespachoSolicitud {
+  loteId: string;
+  fecha: string;
+  enviadoPor: string | null;
+  estado: string;
+  observacion: string | null; // nota que dejó el bodeguero al despachar
+  cantidadItems: number;
+  totalUnidades: number;
+  items: { productoId: number; producto: string; cantidad: number }[];
 }
 
 export interface Solicitud {
@@ -152,7 +178,9 @@ export interface Solicitud {
   solicitante: string;
   estado: EstadoSolicitud;
   notas: string | null;
+  motivoRechazo: string | null;
   fecha: string;
   fechaCierre: string | null;
   items: ItemSolicitud[];
+  despachos: DespachoSolicitud[];
 }

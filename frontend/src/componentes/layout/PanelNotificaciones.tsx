@@ -1,6 +1,10 @@
 // ─── PanelNotificaciones ─────────────────────────────────────────────────────
 // Muestra las notificaciones del usuario autenticado.
 // Se usa en la BarraLateral del POS para que los vendedores vean su horario.
+//
+// pdvId (opcional): en el POS es el PDV del turno actual → solo muestra avisos de
+// esa sucursal + los globales. Sin pdvId (contexto admin) muestra todos. Evita
+// que un vendedor con turnos en dos PDV vea en uno los avisos del otro.
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -15,30 +19,36 @@ interface Notificacion {
   fecha:   string;
 }
 
-export function PanelNotificaciones() {
+interface PanelNotificacionesProps {
+  pdvId?: number;
+}
+
+export function PanelNotificaciones({ pdvId }: PanelNotificacionesProps = {}) {
   const [abierto, setAbierto] = useState(false);
   const qc = useQueryClient();
 
+  const qs = pdvId ? `?pdvId=${pdvId}` : "";
+
   const { data: sinLeer = 0 } = useQuery({
-    queryKey: ["notificaciones", "sinLeer"],
+    queryKey: ["notificaciones", "sinLeer", pdvId ?? null],
     queryFn:  () =>
-      apiGet<{ data: { count: number } }>("/notificaciones/sin-leer")
+      apiGet<{ data: { count: number } }>(`/notificaciones/sin-leer${qs}`)
         .then((r) => r.data.count)
         .catch(() => 0),
     refetchInterval: 60_000,
   });
 
   const { data: notifs = [] } = useQuery({
-    queryKey: ["notificaciones"],
+    queryKey: ["notificaciones", pdvId ?? null],
     queryFn:  () =>
-      apiGet<{ data: Notificacion[] }>("/notificaciones")
+      apiGet<{ data: Notificacion[] }>(`/notificaciones${qs}`)
         .then((r) => r.data)
         .catch(() => [] as Notificacion[]),
     enabled: abierto,
   });
 
   const mutLeerTodas = useMutation({
-    mutationFn: () => apiPatch("/notificaciones/leer-todas", {}),
+    mutationFn: () => apiPatch(`/notificaciones/leer-todas${qs}`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notificaciones"] }),
   });
 

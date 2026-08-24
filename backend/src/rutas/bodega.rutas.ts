@@ -1,8 +1,8 @@
 import { Router } from 'express'
 import { autenticar } from '../middlewares/autenticar'
 import { autorizar } from '../middlewares/autorizar'
-import { despachoSchema, ajustarStockSchema, crearInventarioSchema, crearProductoSchema, guardarLoteSchema } from '../validaciones/bodega.schema'
-import { getStockBodega, registrarDespacho, getDespachos, ajustarStock, crearInventarioBodega, eliminarInventarioBodega, getProductosDisponibles, getCategorias, crearProducto, buscarPorCodigoBarra, guardarLoteInventario, getHistorialInventario } from '../servicios/bodega.servicio'
+import { despachoSchema, ajustarStockSchema, mermaSchema, crearInventarioSchema, crearProductoSchema, guardarLoteSchema } from '../validaciones/bodega.schema'
+import { getStockBodega, getMargenes, registrarDespacho, getDespachos, getDespachosPendientes, confirmarDespacho, ajustarStock, registrarMerma, crearInventarioBodega, eliminarInventarioBodega, getProductosDisponibles, getCategorias, crearProducto, buscarPorCodigoBarra, guardarLoteInventario, getHistorialInventario } from '../servicios/bodega.servicio'
 
 const router = Router()
 
@@ -31,6 +31,19 @@ router.get('/stock',
     } catch (error) {
       next(error)
     }
+  }
+)
+
+/** GET /api/bodega/margenes — Reporte de margen por producto (C7/A42). Solo ADMIN:
+ * expone costos y rentabilidad, información sensible del negocio. */
+router.get('/margenes',
+  autenticar,
+  autorizar('ADMIN'),
+  async (_req, res, next) => {
+    try {
+      const data = await getMargenes()
+      res.json({ data })
+    } catch (error) { next(error) }
   }
 )
 
@@ -63,7 +76,6 @@ router.post('/stock',
       const data = await crearInventarioBodega(parsed.data)
       res.status(201).json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -81,13 +93,32 @@ router.patch('/stock/:inventarioId',
       return
     }
     try {
-      const data = await ajustarStock(id, parsed.data)
+      const data = await ajustarStock(id, parsed.data, {
+        id: req.usuario!.id, nombre: req.usuario!.nombre, rol: req.usuario!.rol,
+      })
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) {
-        res.status(400).json({ error: error.message })
-        return
-      }
+      next(error)
+    }
+  }
+)
+
+/** POST /api/bodega/stock/:inventarioId/merma — Registrar merma explícita (C6/A40) */
+router.post('/stock/:inventarioId/merma',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR', 'BODEGUERO'),
+  async (req, res, next) => {
+    const id = parseInt(req.params.inventarioId as string)
+    if (isNaN(id)) { res.status(400).json({ error: 'ID inválido' }); return }
+    const parsed = mermaSchema.safeParse(req.body)
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Datos inválidos', detalle: parsed.error.flatten() })
+      return
+    }
+    try {
+      const data = await registrarMerma(id, parsed.data, { id: req.usuario!.id, nombre: req.usuario!.nombre })
+      res.status(201).json({ data })
+    } catch (error) {
       next(error)
     }
   }
@@ -107,7 +138,6 @@ router.post('/stock/lote',
       const data = await guardarLoteInventario(parsed.data, { id: req.usuario!.id, nombre: req.usuario!.nombre })
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -138,7 +168,6 @@ router.delete('/stock/:inventarioId',
       const data = await eliminarInventarioBodega(id)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -156,16 +185,44 @@ router.post('/despachos',
     }
 
     try {
-      const usuarioId = req.usuario!.id
-      const resultado = await registrarDespacho(parsed.data, usuarioId)
+      const resultado = await registrarDespacho(parsed.data, { id: req.usuario!.id, nombre: req.usuario!.nombre })
       res.status(201).json({ data: resultado })
     } catch (error) {
-      if (error instanceof Error) {
-        res.status(400).json({ error: error.message })
-        return
-      }
       next(error)
     }
+  }
+)
+
+/** GET /api/bodega/despachos/pendientes?pdvId= — Despachos por confirmar del PDV */
+router.get('/despachos/pendientes',
+  autenticar,
+  async (req, res, next) => {
+    const pdvId = req.query.pdvId ? parseInt(req.query.pdvId as string) : req.usuario!.pdvId
+    if (!pdvId) { res.status(400).json({ error: 'pdvId requerido' }); return }
+    // Un VENDEDOR solo puede consultar su propio PDV.
+    if (req.usuario!.rol === 'VENDEDOR' && req.usuario!.pdvId !== pdvId) {
+      res.status(403).json({ error: 'Acceso denegado' })
+      return
+    }
+    try {
+      res.json({ data: await getDespachosPendientes(pdvId) })
+    } catch (error) { next(error) }
+  }
+)
+
+/** PATCH /api/bodega/despachos/:loteId/confirmar — El vendedor confirma la recepción */
+router.patch('/despachos/:loteId/confirmar',
+  autenticar,
+  autorizar('VENDEDOR', 'ADMIN', 'SUPERVISOR'),
+  async (req, res, next) => {
+    const loteId = String(req.params.loteId ?? '').trim()
+    if (!loteId) { res.status(400).json({ error: 'loteId inválido' }); return }
+    try {
+      const data = await confirmarDespacho(loteId, {
+        id: req.usuario!.id, nombre: req.usuario!.nombre, rol: req.usuario!.rol, pdvId: req.usuario!.pdvId,
+      })
+      res.json({ data })
+    } catch (error) { next(error) }
   }
 )
 
@@ -210,7 +267,6 @@ router.post('/productos',
       const data = await crearProducto(parsed.data)
       res.status(201).json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }

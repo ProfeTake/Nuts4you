@@ -3,7 +3,22 @@ import bcrypt from 'bcryptjs'
 
 const prisma = new PrismaClient()
 
+// ─── Contraseñas del seed ──────────────────────────────────────────────────────
+// En desarrollo se usan los valores por defecto (admin / 1234) para trabajar
+// rápido. En PRODUCCIÓN esos valores están prohibidos: el seed exige
+// SEED_PASSWORD_ADMIN y SEED_PASSWORD_STAFF por variable de entorno y aborta
+// antes de escribir nada si faltan (auditoría H11 / condición de producción).
+const esProduccion = process.env.NODE_ENV === 'production'
+const PASSWORD_ADMIN = process.env.SEED_PASSWORD_ADMIN ?? (esProduccion ? null : 'admin')
+const PASSWORD_STAFF = process.env.SEED_PASSWORD_STAFF ?? (esProduccion ? null : '1234')
+
 async function main() {
+  if (!PASSWORD_ADMIN || !PASSWORD_STAFF) {
+    throw new Error(
+      '[FATAL] En producción el seed requiere SEED_PASSWORD_ADMIN y SEED_PASSWORD_STAFF ' +
+      'como variables de entorno. No se sembrarán credenciales débiles por defecto.',
+    )
+  }
   // ─── Roles ───────────────────────────────────────────────────────────────────
   const roles = ['ADMIN', 'SUPERVISOR', 'BODEGUERO', 'VENDEDOR']
   for (const nombre of roles) {
@@ -56,8 +71,25 @@ async function main() {
   }
   console.log('✓ Config de bonos sembrada para', Object.keys(bonosPorSucursal).length, 'sucursales')
 
+  // ─── Config global de sueldos (fila única) ───────────────────────────────────
+  // Misma fuente: "Sueldos Feb 2026.xlsx". P13 = pago por turno; el 3.000 de la
+  // columna "Adicional"; H164 = cotizaciones; K162 = tolerancia de caja.
+  // `update: {}` para no pisar lo que el admin ya haya configurado.
+  await prisma.configNomina.upsert({
+    where:  { id: 1 },
+    update: {},
+    create: {
+      id:                   1,
+      pago_diario_base:     28000,
+      valor_extra:          3000,
+      cotizaciones_default: 0,
+      tolerancia_faltante:  1000,
+    },
+  })
+  console.log('✓ Config de sueldos: pago diario $28.000 · adicional $3.000 · tolerancia $1.000')
+
   // ─── Categorías ───────────────────────────────────────────────────────────────
-  const categoriaNames = ['Mezclas', 'Paquetes', 'Promos', 'Líquidos', 'Helados', 'Otros']
+  const categoriaNames = ['Mezclas', 'Paquetes', 'Promos', 'Líquidos', 'Helados', 'Otros', 'Conos']
   for (const nombre of categoriaNames) {
     await prisma.categoria.upsert({
       where: { nombre },
@@ -73,6 +105,7 @@ async function main() {
   const catPromos   = await prisma.categoria.findUniqueOrThrow({ where: { nombre: 'Promos' } })
   const catLiquidos = await prisma.categoria.findUniqueOrThrow({ where: { nombre: 'Líquidos' } })
   const catHelados  = await prisma.categoria.findUniqueOrThrow({ where: { nombre: 'Helados' } })
+  const catConos    = await prisma.categoria.findUniqueOrThrow({ where: { nombre: 'Conos' } })
 
   const productosData = [
     // Mezclas (materia prima)
@@ -80,7 +113,7 @@ async function main() {
     { nombre: 'Mezcla Almendras',      categoriaId: catMezclas.id,  precioVenta:    0, costo: 1200 },
     { nombre: 'Mezcla Nueces',         categoriaId: catMezclas.id,  precioVenta:    0, costo: 1500 },
     { nombre: 'Mezcla Promo',          categoriaId: catMezclas.id,  precioVenta:    0, costo: 900  },
-    { nombre: 'Mezcla Helado',         categoriaId: catMezclas.id,  precioVenta:    0, costo: 1000 },
+    { nombre: 'Mezcla de Helados',     categoriaId: catMezclas.id,  precioVenta:    0, costo: 1000 },
     // Paquetes
     { nombre: 'Paquetes Maní',         categoriaId: catPaquetes.id, precioVenta:  800, costo: 350  },
     { nombre: 'Paquetes Almendras',    categoriaId: catPaquetes.id, precioVenta: 1000, costo: 450  },
@@ -95,6 +128,8 @@ async function main() {
     { nombre: 'Jugos Kapo',            categoriaId: catLiquidos.id, precioVenta:  500, costo: 200  },
     // Helados
     { nombre: 'Helados',               categoriaId: catHelados.id,  precioVenta: 1000, costo: 500  },
+    // Conos (materia prima; precio editable por el admin, aún sin valor)
+    { nombre: 'Conos',                 categoriaId: catConos.id,    precioVenta:    0, costo:    0 },
   ]
   for (const p of productosData) {
     await prisma.producto.upsert({
@@ -134,44 +169,44 @@ async function main() {
   }> = [
     // ── Administración ──
     {
-      rut: '11111111-1', nombre: 'Martín Reyes', password: 'admin',
+      rut: '11111111-1', nombre: 'Martín Reyes', password: PASSWORD_ADMIN,
       rolId: rolAdmin.id, pdvId: mallPatio.id, pagoDiario: 0,
     },
     {
-      rut: '22222222-2', nombre: 'Sthefany Reyes', password: '1234',
+      rut: '22222222-2', nombre: 'Sthefany Reyes', password: PASSWORD_STAFF,
       rolId: rolSupervisor.id, pdvId: null, pagoDiario: 0,
     },
 
     // ── Vendedoras que rotan entre sucursales ──
     // RUTs provisionales — actualizar desde Gestión de Usuarios con el RUT real
     {
-      rut: '11111111-2', nombre: 'Alexandra', password: '1234',
+      rut: '11111111-2', nombre: 'Alexandra', password: PASSWORD_STAFF,
       rolId: rolVendedor.id, pdvId: null, pagoDiario: 28000,
     },
     {
-      rut: '11111111-3', nombre: 'María', password: '1234',
+      rut: '11111111-3', nombre: 'María', password: PASSWORD_STAFF,
       rolId: rolVendedor.id, pdvId: null, pagoDiario: 28000,
     },
     {
-      rut: '11111111-4', nombre: 'Luisana', password: '1234',
+      rut: '11111111-4', nombre: 'Luisana', password: PASSWORD_STAFF,
       rolId: rolVendedor.id, pdvId: null, pagoDiario: 28000,
     },
     {
-      rut: '11111111-5', nombre: 'Anaís', password: '1234',
+      rut: '11111111-5', nombre: 'Anaís', password: PASSWORD_STAFF,
       rolId: rolVendedor.id, pdvId: null, pagoDiario: 28000,
     },
 
     // ── Vendedoras adicionales (también rotan) ──
     {
-      rut: '11111111-6', nombre: 'Ingrid', password: '1234',
+      rut: '11111111-6', nombre: 'Ingrid', password: PASSWORD_STAFF,
       rolId: rolVendedor.id, pdvId: null, pagoDiario: 28000,
     },
     {
-      rut: '11111111-7', nombre: 'María Elena', password: '1234',
+      rut: '11111111-7', nombre: 'María Elena', password: PASSWORD_STAFF,
       rolId: rolVendedor.id, pdvId: null, pagoDiario: 28000,
     },
     {
-      rut: '11111111-8', nombre: 'Denisse', password: '1234',
+      rut: '11111111-8', nombre: 'Denisse', password: PASSWORD_STAFF,
       rolId: rolVendedor.id, pdvId: null, pagoDiario: 28000,
     },
   ]

@@ -1,3 +1,8 @@
+/* eslint-disable react-refresh/only-export-components --
+   El archivo exporta UN solo componente (ModalEscáner); PanelEscanear y
+   PanelGenerar son las dos pestañas privadas del mismo sheet y comparten tipos y
+   constantes con él. Separarlos solo mejoraría la frontera de Fast Refresh en
+   dev, a cambio de dispersar código que se lee mejor junto. */
 // ─── EscánerCodigos ──────────────────────────────────────────────────────────
 // FAB (botón flotante) que abre un bottom sheet con escáner + generador.
 // Diseñado mobile-first: el sheet ocupa casi toda la pantalla, deslizable.
@@ -216,7 +221,11 @@ function PanelEscanear({ onCodigoDetectado, onCerrarModal }: { onCodigoDetectado
     } finally {
       setCargando(false);
     }
-  }, [camaraId]);
+    // Los callbacks del padre van en las deps: sin ellos el escáner se quedaba con
+    // la primera versión y podía notificar un código a un handler viejo. Recrear
+    // `iniciar` no reinicia la cámara — solo se invoca desde onClick, nunca desde
+    // un efecto.
+  }, [camaraId, onCodigoDetectado, onCerrarModal]);
 
   useEffect(() => { return () => detener(); }, [detener]);
 

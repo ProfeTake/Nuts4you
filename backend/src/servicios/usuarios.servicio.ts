@@ -1,8 +1,10 @@
 import bcrypt from 'bcryptjs'
 import prisma from '../config/prisma'
+import { ErrorApp, conflicto } from '../lib/errores'
 import type { CrearUsuarioInput, EditarUsuarioInput, EstadoUsuarioInput } from '../validaciones/usuarios.schema'
 import { enviarCredencialesUsuario } from './correo.servicio'
 import { usuarioIncludeConUltimoPdv } from './shared/usuario.query'
+import { getConfigSueldos, pagoDiarioDe } from './configNomina.servicio'
 
 function formatearUsuario(u: {
   id: number
@@ -10,11 +12,13 @@ function formatearUsuario(u: {
   nombre: string
   email: string | null
   activo: boolean
-  pago_diario: number
+  es_demo: boolean
+  /** Override; null = usar ConfigNomina.pago_diario_base (ver configNomina.servicio). */
+  pago_diario: number | null
   rol: { nombre: string }
   pdv: { id: number; nombre: string } | null
   turnos: { id: number; fecha_apertura: Date; pdv?: { id: number; nombre: string } | null }[]
-}) {
+}, pagoDiarioBase: number) {
   // PDV mostrado: PDV del último turno trabajado (no el del perfil, que es null para vendedores rotativos)
   const pdvUltimoTurno = u.turnos[0]?.pdv ?? null
   return {
@@ -26,17 +30,22 @@ function formatearUsuario(u: {
     pdvId:        pdvUltimoTurno?.id ?? u.pdv?.id ?? null,
     pdvNombre:    pdvUltimoTurno?.nombre ?? u.pdv?.nombre ?? null,
     activo:       u.activo,
-    pagoDiario:   u.pago_diario,
+    esDemo:       u.es_demo,
+    pagoDiario:   pagoDiarioDe(u.pago_diario, pagoDiarioBase),
+    pagoDiarioOverride: u.pago_diario,
     ultimoTurno:  u.turnos[0]?.fecha_apertura.toISOString() ?? null,
   }
 }
 
 export async function getUsuarios() {
-  const usuarios = await prisma.usuario.findMany({
-    include: usuarioIncludeConUltimoPdv,
-    orderBy: [{ rol: { nombre: 'asc' } }, { nombre: 'asc' }],
-  })
-  return usuarios.map(formatearUsuario)
+  const [usuarios, config] = await Promise.all([
+    prisma.usuario.findMany({
+      include: usuarioIncludeConUltimoPdv,
+      orderBy: [{ rol: { nombre: 'asc' } }, { nombre: 'asc' }],
+    }),
+    getConfigSueldos(),
+  ])
+  return usuarios.map((u) => formatearUsuario(u, config.pagoDiarioBase))
 }
 
 const limpiarRut = (rut: string) => rut.replace(/\./g, '').trim()
@@ -44,14 +53,14 @@ const limpiarRut = (rut: string) => rut.replace(/\./g, '').trim()
 export async function crearUsuario(data: CrearUsuarioInput) {
   const rut = limpiarRut(data.rut)
   const existente = await prisma.usuario.findUnique({ where: { rut } })
-  if (existente) throw new Error(`Ya existe un usuario con el RUT ${rut}`)
+  if (existente) throw conflicto(`Ya existe un usuario con el RUT ${rut}`)
 
   const email = data.email.trim().toLowerCase()
   const emailEnUso = await prisma.usuario.findUnique({ where: { email } })
-  if (emailEnUso) throw new Error(`El correo ${email} ya está en uso por otro usuario`)
+  if (emailEnUso) throw conflicto(`El correo ${email} ya está en uso por otro usuario`)
 
   const rolDb = await prisma.rol.findUnique({ where: { nombre: data.rol } })
-  if (!rolDb) throw new Error(`Rol ${data.rol} no encontrado`)
+  if (!rolDb) throw new ErrorApp(`Rol ${data.rol} no encontrado`)
 
   const hash = await bcrypt.hash(data.password, 10)
 
@@ -63,7 +72,8 @@ export async function crearUsuario(data: CrearUsuarioInput) {
       password_hash: hash,
       rol_id:        rolDb.id,
       pdv_id:        data.pdvId ?? null,
-      pago_diario:   data.pagoDiario,
+      // null = sin trato particular: hereda ConfigNomina.pago_diario_base.
+      pago_diario:   data.pagoDiario ?? null,
     },
     include: usuarioIncludeConUltimoPdv,
   })
@@ -76,7 +86,8 @@ export async function crearUsuario(data: CrearUsuarioInput) {
     data.password,
   )
 
-  return { ...formatearUsuario(usuario), correoEnviado }
+  const { pagoDiarioBase } = await getConfigSueldos()
+  return { ...formatearUsuario(usuario, pagoDiarioBase), correoEnviado }
 }
 
 export async function editarUsuario(id: number, data: EditarUsuarioInput) {
@@ -85,45 +96,88 @@ export async function editarUsuario(id: number, data: EditarUsuarioInput) {
   if (data.rut) {
     const rut = limpiarRut(data.rut)
     const existente = await prisma.usuario.findUnique({ where: { rut } })
-    if (existente && existente.id !== id) throw new Error(`El RUT ${rut} ya está en uso por otro usuario`)
+    if (existente && existente.id !== id) throw conflicto(`El RUT ${rut} ya está en uso por otro usuario`)
     updateData.rut = rut
   }
   if (data.nombre)   updateData.nombre    = data.nombre
   if (data.email) {
     const email = data.email.trim().toLowerCase()
     const emailEnUso = await prisma.usuario.findUnique({ where: { email } })
-    if (emailEnUso && emailEnUso.id !== id) throw new Error(`El correo ${email} ya está en uso por otro usuario`)
+    if (emailEnUso && emailEnUso.id !== id) throw conflicto(`El correo ${email} ya está en uso por otro usuario`)
     updateData.email = email
   }
   if (data.password) updateData.password_hash = await bcrypt.hash(data.password, 10)
   if (data.pdvId !== undefined) updateData.pdv_id = data.pdvId
+  // null explícito = quitar el override y volver al pago diario global.
   if (data.pagoDiario !== undefined) updateData.pago_diario = data.pagoDiario
   if (data.rol) {
     const rolDb = await prisma.rol.findUnique({ where: { nombre: data.rol } })
-    if (!rolDb) throw new Error(`Rol ${data.rol} no encontrado`)
+    if (!rolDb) throw new ErrorApp(`Rol ${data.rol} no encontrado`)
     updateData.rol_id = rolDb.id
   }
 
-  const usuario = await prisma.usuario.update({
-    where: { id },
-    data:  updateData,
-    include: usuarioIncludeConUltimoPdv,
+  const usuario = await prisma.$transaction(async (tx) => {
+    // Guarda P4: no degradar el rol del único admin activo (evita lockout total).
+    if (data.rol && data.rol !== 'ADMIN') {
+      const objetivo = await tx.usuario.findUniqueOrThrow({
+        where: { id }, include: { rol: { select: { nombre: true } } },
+      })
+      if (objetivo.rol.nombre === 'ADMIN') {
+        const totalAdmins = await tx.usuario.count({ where: { rol: { nombre: 'ADMIN' }, activo: true } })
+        if (totalAdmins <= 1) throw conflicto('No se puede quitar el rol de administrador al único admin activo del sistema')
+      }
+    }
+    return tx.usuario.update({
+      where: { id },
+      data:  updateData,
+      include: usuarioIncludeConUltimoPdv,
+    })
   })
 
-  return formatearUsuario(usuario)
+  const { pagoDiarioBase } = await getConfigSueldos()
+  return formatearUsuario(usuario, pagoDiarioBase)
 }
 
 export async function cambiarEstadoUsuario(id: number, data: EstadoUsuarioInput) {
-  const usuario = await prisma.usuario.update({
-    where: { id },
-    data:  { activo: data.activo },
-    include: usuarioIncludeConUltimoPdv,
+  const usuario = await prisma.$transaction(async (tx) => {
+    // Guarda P4: no desactivar al único admin activo (evita lockout total).
+    // El conteo va dentro de la transacción para evitar la race de dos
+    // desactivaciones simultáneas (mismo patrón que eliminarUsuario).
+    if (!data.activo) {
+      const objetivo = await tx.usuario.findUniqueOrThrow({
+        where: { id }, include: { rol: { select: { nombre: true } } },
+      })
+      if (objetivo.rol.nombre === 'ADMIN') {
+        const totalAdmins = await tx.usuario.count({ where: { rol: { nombre: 'ADMIN' }, activo: true } })
+        if (totalAdmins <= 1) throw conflicto('No se puede desactivar el único administrador activo del sistema')
+      }
+
+      // Guarda C19 (A35): desactivar a alguien con turno ABIERTO lo deja huérfano —
+      // la sesión se revoca al instante (401 en todo), nadie puede cerrar ese turno
+      // con datos reales y el PDV queda bloqueado para abrir uno nuevo.
+      const turnoAbierto = await tx.turnoCaja.findFirst({
+        where:  { usuario_id: id, estado: 'ABIERTO' },
+        select: { id: true, pdv: { select: { nombre: true } } },
+      })
+      if (turnoAbierto) {
+        throw conflicto(
+          `No se puede desactivar: tiene el turno #${turnoAbierto.id} ABIERTO en ${turnoAbierto.pdv.nombre}. ` +
+          `Debe cerrarse ese turno primero (o ciérralo tú como admin desde el POS de esa sucursal).`,
+        )
+      }
+    }
+    return tx.usuario.update({
+      where: { id },
+      data:  { activo: data.activo },
+      include: usuarioIncludeConUltimoPdv,
+    })
   })
-  return formatearUsuario(usuario)
+  const { pagoDiarioBase } = await getConfigSueldos()
+  return formatearUsuario(usuario, pagoDiarioBase)
 }
 
 export async function eliminarUsuario(id: number, solicitanteId: number) {
-  if (id === solicitanteId) throw new Error('No puedes eliminar tu propia cuenta')
+  if (id === solicitanteId) throw new ErrorApp('No puedes eliminar tu propia cuenta')
 
   const usuario = await prisma.usuario.findUniqueOrThrow({
     where: { id },
@@ -137,7 +191,21 @@ export async function eliminarUsuario(id: number, solicitanteId: number) {
       const totalAdmins = await tx.usuario.count({
         where: { rol: { nombre: 'ADMIN' }, activo: true },
       })
-      if (totalAdmins <= 1) throw new Error('No se puede eliminar el único administrador activo del sistema')
+      if (totalAdmins <= 1) throw conflicto('No se puede eliminar el único administrador activo del sistema')
+    }
+
+    // Guarda C19 (A35): misma protección que al desactivar — eliminar a alguien
+    // con turno ABIERTO dejaría un turno huérfano (usuario_id null) imposible de
+    // cerrar con datos reales, bloqueando el PDV.
+    const turnoAbierto = await tx.turnoCaja.findFirst({
+      where:  { usuario_id: id, estado: 'ABIERTO' },
+      select: { id: true, pdv: { select: { nombre: true } } },
+    })
+    if (turnoAbierto) {
+      throw conflicto(
+        `No se puede eliminar: tiene el turno #${turnoAbierto.id} ABIERTO en ${turnoAbierto.pdv.nombre}. ` +
+        `Debe cerrarse ese turno primero.`,
+      )
     }
 
     // Desvincula el usuario de los registros históricos (se conservan)

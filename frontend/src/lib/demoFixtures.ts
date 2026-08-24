@@ -187,18 +187,20 @@ let nextProveedorId = 3;
 
 interface DetalleFacturaDemo { id: number; descripcion: string; cantidad: number; precioUnitario: number }
 interface FacturaDemo {
-  id: number; proveedorId: number; proveedorNombre: string; numeroFactura: string;
+  id: number; proveedorId: number; proveedorNombre: string;
+  proveedorBanco: string | null; proveedorTipoCuenta: string | null; proveedorNumeroCuenta: string | null;
+  numeroFactura: string;
   fecha: string; fechaVencimiento: string | null; montoTotal: number;
   estado: "PENDIENTE" | "PAGADA" | "ANULADA"; notas: string | null; creadoEn: string;
   items: DetalleFacturaDemo[];
 }
 
 let facturas: FacturaDemo[] = [
-  { id: 1, proveedorId: 1, proveedorNombre: "Distribuidora Frutos del Sur", numeroFactura: "F-00123", fecha: fechaHace(6), fechaVencimiento: fechaHace(-14), montoTotal: 450000, estado: "PENDIENTE", notas: null, creadoEn: isoHace(6), items: [
+  { id: 1, proveedorId: 1, proveedorNombre: "Distribuidora Frutos del Sur", proveedorBanco: "Banco Estado", proveedorTipoCuenta: "Cuenta Corriente", proveedorNumeroCuenta: "12345678", numeroFactura: "F-00123", fecha: fechaHace(6), fechaVencimiento: fechaHace(-14), montoTotal: 450000, estado: "PENDIENTE", notas: null, creadoEn: isoHace(6), items: [
     { id: 1, descripcion: "Maní crudo 25kg", cantidad: 5, precioUnitario: 60000 },
     { id: 2, descripcion: "Nueces 10kg", cantidad: 3, precioUnitario: 50000 },
   ] },
-  { id: 2, proveedorId: 2, proveedorNombre: "Envases y Empaques Ltda", numeroFactura: "F-00098", fecha: fechaHace(12), fechaVencimiento: null, montoTotal: 120000, estado: "PAGADA", notas: null, creadoEn: isoHace(12), items: [
+  { id: 2, proveedorId: 2, proveedorNombre: "Envases y Empaques Ltda", proveedorBanco: "Banco de Chile", proveedorTipoCuenta: "Cuenta Vista", proveedorNumeroCuenta: "0098776655", numeroFactura: "F-00098", fecha: fechaHace(12), fechaVencimiento: null, montoTotal: 120000, estado: "PAGADA", notas: null, creadoEn: isoHace(12), items: [
     { id: 3, descripcion: "Bolsas kraft 1kg (x500)", cantidad: 1, precioUnitario: 120000 },
   ] },
 ];
@@ -239,7 +241,7 @@ let nextCierreId = 2;
 // ─── Config de bonos ─────────────────────────────────────────────────────────
 
 interface TramoDemo { id: number; umbral: number; monto: number; activo: boolean }
-let configBonos: Record<number, TramoDemo[]> = {
+const configBonos: Record<number, TramoDemo[]> = {
   2: [
     { id: 1, umbral: 400000, monto: 30000, activo: true },
     { id: 2, umbral: 350000, monto: 19000, activo: true },
@@ -269,6 +271,16 @@ let configBonos: Record<number, TramoDemo[]> = {
 };
 let nextTramoId = 17;
 
+// Config global de sueldos (fila única ConfigNomina). Espeja los valores de la
+// planilla del cliente: pago por turno, valor del adicional, cotizaciones
+// sugeridas y la tolerancia bajo la cual un descuadre no se descuenta.
+let configSueldos = {
+  pagoDiarioBase:      28000,
+  valorExtra:          3000,
+  cotizacionesDefault: 0,
+  toleranciaFaltante:  1000,
+};
+
 // ─── Notificaciones ──────────────────────────────────────────────────────────
 
 let notificaciones = [
@@ -281,17 +293,31 @@ let notificaciones = [
 
 interface SolicitudDemo {
   id: number; pdvId: number; pdvNombre: string; solicitante: string; fecha: string;
-  estado: "PENDIENTE" | "DESPACHADA" | "CONFIRMADA";
-  items: { id: number; producto: string; cantidad: number }[];
+  estado: "PENDIENTE" | "DESPACHADA" | "CONFIRMADA" | "RECHAZADA";
+  // productoId: el despacho se declara por producto (cantidades ajustables).
+  items: { id: number; productoId: number; producto: string; categoria: string; cantidad: number }[];
   notas: string | null;
+  motivoRechazo?: string | null;
+  // Despacho(s) que movieron stock para esta solicitud (A15).
+  despachos: {
+    loteId: string; fecha: string; enviadoPor: string | null; estado: string;
+    cantidadItems: number; totalUnidades: number;
+    items: { productoId: number; producto: string; cantidad: number }[];
+  }[];
 }
+
+const itemSolicitudDemo = (id: number, productoId: number, cantidad: number) => {
+  const prod = stockBodega.find((s) => s.productoId === productoId);
+  return { id, productoId, producto: prod?.nombre ?? "Producto", categoria: prod?.categoria ?? "Otros", cantidad };
+};
 
 let solicitudes: SolicitudDemo[] = [
   {
     id: 1, pdvId: 3, pdvNombre: "Paseo Independencia", solicitante: "Javiera Muñoz", fecha: isoHace(0),
     estado: "PENDIENTE",
-    items: [{ id: 1, producto: "Maní Salado", cantidad: 10 }, { id: 2, producto: "Bebidas", cantidad: 6 }],
+    items: [itemSolicitudDemo(1, 1, 10), itemSolicitudDemo(2, 13, 6)],
     notas: "Se está agotando para el fin de semana",
+    despachos: [],
   },
 ];
 let nextSolicitudId = 2;
@@ -425,7 +451,25 @@ function resumenDiario(fecha: string) {
   };
 }
 
-function resumenVentasSucursal(pdvId: number, _fecha: string) {
+/**
+ * Retiros que el admin hizo durante el turno. El POS los lee para descontarlos
+ * de su cuadre: son la razón de que el efectivo esperado sea menor que la venta.
+ */
+// Montos deliberadamente moderados: la sucursal demo más chica vende ~$51.000 en
+// efectivo, así que retiros + gastos tienen que caber ahí sin dejar el esperado
+// en caja negativo.
+let retirosDemo = [
+  { id: 1, monto: 20000, descripcion: "Depósito al banco", realizadoPor: "Admin Demo", fechaHora: "16:20" },
+  { id: 2, monto: 10000, descripcion: "Pago a proveedor de bolsas", realizadoPor: "Admin Demo", fechaHora: "18:05" },
+];
+let nextRetiroId = 3;
+
+/** Gastos pagados del efectivo de la caja: también bajan el esperado del cuadre. */
+const gastosDemo = [
+  { id: 1, descripcion: "Artículos de aseo", monto: 3500 },
+];
+
+function resumenVentasSucursal(pdvId: number) {
   const pdv = pdvs.find((p) => p.id === pdvId);
   const vendedor = vendedorPorPdv(pdvId);
   const base = VENTA_BASE[pdvId] ?? 150000;
@@ -434,9 +478,18 @@ function resumenVentasSucursal(pdvId: number, _fecha: string) {
   const ventaTarjeta = Math.round(ventaTotal * 0.3);
   const ventaTransferencia = ventaTotal - ventaEfectivo - ventaTarjeta;
   const pagoDiario = vendedor?.pagoDiario ?? 28000;
-  const totalRetiros = 0;
-  const efectivoDeclarado = ventaEfectivo;
-  const diferenciaCaja = efectivoDeclarado - (ventaEfectivo + totalRetiros - pagoDiario) - pagoDiario;
+  // Cuadre con las mismas identidades del backend (ver calculos.servicio.ts):
+  //   esperadoCaja = ventaEfectivo − gastos − retiros
+  //   diferencia   = efectivoContado − esperadoCaja
+  // El retiro parcial es lo habitual en el punto: el admin pasa a buscar efectivo
+  // durante el turno, y por eso el esperado en caja es menor que la venta.
+  // Derivados de las mismas listas que devuelven los endpoints de detalle, para
+  // que el total del cuadre y el desglose de movimientos coincidan en pantalla.
+  const totalGastos  = gastosDemo.reduce((s, g) => s + g.monto, 0);
+  const totalRetiros = retirosDemo.reduce((s, r) => s + r.monto, 0);
+  const esperadoCaja = ventaEfectivo - totalGastos - totalRetiros;
+  const efectivoDeclarado = esperadoCaja; // vendedora cuadrada
+  const diferenciaCaja = efectivoDeclarado - esperadoCaja;
   const dias = diasEnMes(mesActual());
   const diasTranscurridos = new Date().getDate();
 
@@ -457,9 +510,21 @@ function resumenVentasSucursal(pdvId: number, _fecha: string) {
     ventaTarjeta,
     ventaTransferencia,
     efectivoDeclarado,
+    // La caja chica queda en el punto y fuera del cuadre: se entrega todo lo contado.
+    efectivoAEntregar: Math.max(0, efectivoDeclarado),
     diferenciaCaja,
     saldoInicial: 20000,
     totalRetiros,
+    totalGastos,
+    esperadoCaja,
+    // A depositar del turno (planilla: neto de lo pagado al vendedor con esta caja)
+    depositoBruto: Math.max(0, efectivoDeclarado) + totalRetiros,
+    pagoVendedorTotal: 0,
+    aDepositar: Math.max(0, efectivoDeclarado) + totalRetiros,
+    depositoBloqueado: false,
+    pagosVendedor: [] as { id: number; usuarioId: number | null; vendedor: string; turnosPagados: number; montoTotal: number; creadoPor: string | null; creadoEn: string }[],
+    saldosFinales: [] as { productoId: number; nombre: string; categoria: string; cantidad: number }[],
+    detalleVentas: [] as { productoId: number; nombre: string; categoria: string; cantidad: number; precioUnitario: number; subtotal: number }[],
     metricas: {
       totalMes: Math.round(base * diasTranscurridos),
       promedioDiario: Math.round(base),
@@ -584,7 +649,7 @@ export function resolverFixtureDemo(metodo: string, endpoint: string, body: unkn
   }
 
   // ── Ventas por sucursal / historial ──
-  if (p.metodo === "GET" && path === "/admin/ventas-sucursal") return ok(resumenVentasSucursal(Number(query.pdvId), query.fecha));
+  if (p.metodo === "GET" && path === "/admin/ventas-sucursal") return ok(resumenVentasSucursal(Number(query.pdvId)));
   if (p.metodo === "GET" && path === "/admin/historial-turnos") return ok(historialTurnos(Number(query.pdvId), query.desde, query.hasta));
   if (p.metodo === "GET" && m(/^\/admin\/vendedores\/(\d+)\/faltantes$/)) {
     const uid_ = Number(m(/^\/admin\/vendedores\/(\d+)\/faltantes$/)![1]);
@@ -594,24 +659,83 @@ export function resolverFixtureDemo(metodo: string, endpoint: string, body: unkn
       { turnoId: 7001, fecha: fechaHace(4), pdvNombre: u.pdvNombre ?? "", faltante: 5000 },
     ]);
   }
-  if (p.metodo === "POST" && m(/^\/pos\/turnos\/(\d+)\/retiros$/)) return ok({ mensaje: "Retiro registrado" });
+  if (p.metodo === "POST" && m(/^\/pos\/turnos\/(\d+)\/retiros$/)) {
+    const b = body as { monto: number; descripcion?: string };
+    const nuevo = {
+      id: nextRetiroId++, monto: b.monto,
+      descripcion: b.descripcion ?? "Retiro de efectivo",
+      realizadoPor: "Admin Demo",
+      fechaHora: new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" }),
+    };
+    retirosDemo = [...retirosDemo, nuevo];
+    return ok(nuevo);
+  }
+  // El POS lee los retiros para descontarlos de su cuadre (los registra el admin).
+  if (p.metodo === "GET" && m(/^\/pos\/turnos\/(\d+)\/retiros$/)) return ok(retirosDemo);
+  if (p.metodo === "GET" && m(/^\/pos\/turnos\/(\d+)\/gastos$/)) return ok(gastosDemo);
+  if (p.metodo === "PATCH" && m(/^\/pos\/turnos\/(\d+)\/cerrar-admin$/)) return ok({ mensaje: "Turno cerrado administrativamente" });
 
   // ── Solicitudes ──
   if (p.metodo === "GET" && path === "/solicitudes") return ok(solicitudes);
   if (p.metodo === "POST" && path === "/solicitudes") {
     const b = body as { pdvId: number; items: { productoId: number; cantidad: number }[]; notas?: string };
-    const nueva = { id: nextSolicitudId++, pdvId: b.pdvId, pdvNombre: pdvs.find((x) => x.id === b.pdvId)?.nombre ?? "", solicitante: "Usuario Demo", fecha: new Date().toISOString(), estado: "PENDIENTE" as const, items: b.items.map((it, i) => ({ id: i + 1, producto: stockBodega.find((s) => s.productoId === it.productoId)?.nombre ?? "Producto", cantidad: it.cantidad })), notas: b.notas ?? null };
+    const nueva = { id: nextSolicitudId++, pdvId: b.pdvId, pdvNombre: pdvs.find((x) => x.id === b.pdvId)?.nombre ?? "", solicitante: "Usuario Demo", fecha: new Date().toISOString(), estado: "PENDIENTE" as const, items: b.items.map((it, i) => itemSolicitudDemo(i + 1, it.productoId, it.cantidad)), notas: b.notas ?? null, despachos: [] };
     solicitudes = [nueva, ...solicitudes];
+    notificaciones = [
+      { id: (notificaciones[0]?.id ?? 0) + 1, titulo: "Nueva solicitud de insumos",
+        mensaje: `${nueva.solicitante} en ${nueva.pdvNombre} pidió ${b.items.length} producto(s) a bodega.`,
+        leida: false, fecha: new Date().toISOString() },
+      ...notificaciones,
+    ];
     return ok(nueva);
   }
+  // Despachar mueve stock real (A15): en demo también se descuenta la bodega, se
+  // registra el despacho enlazado y aparece en el historial de despachos.
   if (p.metodo === "PATCH" && m(/^\/solicitudes\/(\d+)\/despachar$/)) {
     const id = Number(m(/^\/solicitudes\/(\d+)\/despachar$/)![1]);
-    solicitudes = solicitudes.map((s) => (s.id === id ? { ...s, estado: "DESPACHADA" as const } : s));
+    const b  = body as { items: { productoId: number; cantidad: number }[]; notas?: string };
+    const enviados = (b?.items ?? []).filter((it) => it.cantidad > 0);
+    const sol = solicitudes.find((s) => s.id === id);
+    const itemsDespacho = enviados.map((it) => ({
+      productoId: it.productoId,
+      producto:   stockBodega.find((s) => s.productoId === it.productoId)?.nombre ?? "Producto",
+      cantidad:   it.cantidad,
+    }));
+    stockBodega = stockBodega.map((s) => {
+      const env = enviados.find((it) => it.productoId === s.productoId);
+      return env ? { ...s, stockActual: Math.max(0, s.stockActual - env.cantidad) } : s;
+    });
+    const totalUnidades = itemsDespacho.reduce((acc, it) => acc + it.cantidad, 0);
+    const loteId = uid("desp");
+    despachos = [{
+      loteId, fecha: new Date().toISOString(), origen: "Bodega Central",
+      destino: sol?.pdvNombre ?? "Sucursal",
+      cantidadItems: itemsDespacho.length, totalUnidades,
+      items: itemsDespacho.map((it, i) => ({ id: i + 1, producto: it.producto, cantidad: it.cantidad })),
+    }, ...despachos];
+    solicitudes = solicitudes.map((s) => (s.id === id ? {
+      ...s,
+      estado: "DESPACHADA" as const,
+      despachos: [{
+        loteId, fecha: new Date().toISOString(), enviadoPor: "Usuario Demo", estado: "ENVIADO",
+        cantidadItems: itemsDespacho.length, totalUnidades, items: itemsDespacho,
+      }, ...s.despachos],
+    } : s));
     return ok(solicitudes.find((s) => s.id === id));
   }
   if (p.metodo === "PATCH" && m(/^\/solicitudes\/(\d+)\/confirmar$/)) {
     const id = Number(m(/^\/solicitudes\/(\d+)\/confirmar$/)![1]);
-    solicitudes = solicitudes.map((s) => (s.id === id ? { ...s, estado: "CONFIRMADA" as const } : s));
+    solicitudes = solicitudes.map((s) => (s.id === id ? {
+      ...s,
+      estado: "CONFIRMADA" as const,
+      despachos: s.despachos.map((d) => ({ ...d, estado: "CONFIRMADO" })),
+    } : s));
+    return ok(solicitudes.find((s) => s.id === id));
+  }
+  if (p.metodo === "PATCH" && m(/^\/solicitudes\/(\d+)\/rechazar$/)) {
+    const id = Number(m(/^\/solicitudes\/(\d+)\/rechazar$/)![1]);
+    const motivo = typeof (body as { motivo?: string }).motivo === "string" ? (body as { motivo: string }).motivo : null;
+    solicitudes = solicitudes.map((s) => (s.id === id ? { ...s, estado: "RECHAZADA" as const, motivoRechazo: motivo } : s));
     return ok(solicitudes.find((s) => s.id === id));
   }
 
@@ -675,7 +799,18 @@ export function resolverFixtureDemo(metodo: string, endpoint: string, body: unkn
   if (p.metodo === "GET" && path === "/finanzas/depositos") return ok(depositos);
   if (p.metodo === "PATCH" && m(/^\/finanzas\/depositos\/(\d+)$/)) {
     const id = Number(m(/^\/finanzas\/depositos\/(\d+)$/)![1]);
-    depositos = depositos.map((d) => (d.id === id ? { ...d, montoDepositado: d.montoADepositar, faltaDepositar: 0, estado: "Depositado" as const, fechaDeposito: fechaHace(0) } : d));
+    const b = body as { estado?: "CONFIRMADO" | "TRANSFERENCIA"; montoReal?: number };
+    depositos = depositos.map((d) => {
+      if (d.id !== id) return d;
+      const montoReal = b.montoReal ?? d.montoADepositar;
+      return {
+        ...d,
+        montoDepositado: montoReal,
+        faltaDepositar: Math.max(0, d.montoADepositar - montoReal),
+        estado: (b.estado === "TRANSFERENCIA" ? "Transferencia" : "Depositado") as "Transferencia" | "Depositado",
+        fechaDeposito: fechaHace(0),
+      };
+    });
     return ok({});
   }
 
@@ -709,8 +844,11 @@ export function resolverFixtureDemo(metodo: string, endpoint: string, body: unkn
   }
   if (p.metodo === "POST" && path === "/proveedores/facturas") {
     const b = body as { proveedorId: number; numeroFactura: string; fecha: string; fechaVencimiento?: string; montoTotal: number; notas?: string; items: { descripcion: string; cantidad: number; precioUnitario: number }[] };
+    const prov = proveedores.find((x) => x.id === b.proveedorId);
     const nueva: FacturaDemo = {
-      id: nextFacturaId++, proveedorId: b.proveedorId, proveedorNombre: proveedores.find((x) => x.id === b.proveedorId)?.nombre ?? "", numeroFactura: b.numeroFactura,
+      id: nextFacturaId++, proveedorId: b.proveedorId, proveedorNombre: prov?.nombre ?? "",
+      proveedorBanco: prov?.banco ?? null, proveedorTipoCuenta: prov?.tipo_cuenta ?? null, proveedorNumeroCuenta: prov?.numero_cuenta ?? null,
+      numeroFactura: b.numeroFactura,
       fecha: b.fecha, fechaVencimiento: b.fechaVencimiento ?? null, montoTotal: b.montoTotal, estado: "PENDIENTE", notas: b.notas ?? null, creadoEn: new Date().toISOString(),
       items: b.items.map((it, i) => ({ id: i + 1, ...it })),
     };
@@ -755,6 +893,23 @@ export function resolverFixtureDemo(metodo: string, endpoint: string, body: unkn
     return ok({ id });
   }
 
+  // ── RRHH: pagos ──
+  // El demo no simula la deuda de turnos impagos: se listan los vendedores con 0
+  // pendientes para que "Pagar a Vendedor" se vea completo sin inventar plata.
+  if (p.metodo === "GET" && path === "/rrhh/pagos/pendientes") {
+    return ok({
+      ...configSueldos,
+      vendedores: VENDEDORES().map((v) => ({
+        usuarioId: v.id,
+        nombre: v.nombre,
+        pagoDiario: v.pagoDiario,
+        turnosPendientes: 0,
+        turnos: [],
+        acumulados: [],
+      })),
+    });
+  }
+
   // ── RRHH: personal / turnos / nómina ──
   if (p.metodo === "GET" && path === "/rrhh/personal") {
     return ok(usuarios.filter((u) => u.rol === "VENDEDOR").map((u) => ({ id: u.id, nombre: u.nombre, rut: u.rut, email: u.email, pdvId: u.pdvId, pdvNombre: u.pdvNombre, pagoDiario: u.pagoDiario, activo: u.activo, ultimoTurno: u.ultimoTurno })));
@@ -793,9 +948,22 @@ export function resolverFixtureDemo(metodo: string, endpoint: string, body: unkn
       const diasTrabajados = Math.max(1, dias - Math.floor(Math.random() * 3));
       const pagoBase = diasTrabajados * v.pagoDiario;
       const bonos = Math.round(promedioVentaDiaria > 200000 ? diasTrabajados * 8000 : diasTrabajados * 3000);
-      const descuentosCaja = Math.random() > 0.7 ? 8000 : 0;
-      return { usuarioId: v.id, nombre: v.nombre, diasTrabajados, promedioVentaDiaria, pagoBase, bonos, descuentosCaja, sueldoLiquido: pagoBase + bonos - descuentosCaja };
+      // "Adicional" de un par de turnos del mes, para que la columna no salga vacía.
+      const extras = Math.round(configSueldos.valorExtra * 1.5);
+      // Neto de caja del mes (sobrantes compensan faltantes). Solo se descuenta si
+      // queda peor que la tolerancia; un descuadre de vuelto no le cuesta el sueldo.
+      const netoCaja = Math.random() > 0.7 ? -8000 : -300;
+      const descuentosCaja = netoCaja < -configSueldos.toleranciaFaltante ? -netoCaja : 0;
+      return { usuarioId: v.id, nombre: v.nombre, diasTrabajados, promedioVentaDiaria, pagoBase, bonos, extras, descuentosCaja, netoCaja, sueldoLiquido: pagoBase + bonos + extras - descuentosCaja };
     }));
+  }
+
+  // El adicional de un turno (planilla, col. E). En demo solo se acepta y se
+  // devuelve: no hay turnos impagos que liquidar, así que no altera ningún total.
+  if (p.metodo === "PATCH" && m(/^\/rrhh\/turnos\/(\d+)\/extra$/)) {
+    const turnoId = Number(m(/^\/rrhh\/turnos\/(\d+)\/extra$/)![1]);
+    const extraDecimas = (body as { extraDecimas: number }).extraDecimas;
+    return ok({ turnoId, extraDecimas, montoExtra: Math.round((extraDecimas * configSueldos.valorExtra) / 10) });
   }
 
   // ── RRHH: horarios ──
@@ -885,6 +1053,13 @@ export function resolverFixtureDemo(metodo: string, endpoint: string, body: unkn
     const b = body as { tramos: { umbral: number; monto: number }[] };
     configBonos[pdvId] = b.tramos.map((t) => ({ id: nextTramoId++, umbral: t.umbral, monto: t.monto, activo: true }));
     return ok({ pdvId, tramos: configBonos[pdvId] });
+  }
+
+  // ── Config global de sueldos (pago diario, adicional, cotizaciones, tolerancia) ──
+  if (p.metodo === "GET" && path === "/config-nomina") return ok({ ...configSueldos });
+  if (p.metodo === "PUT" && path === "/config-nomina") {
+    configSueldos = { ...configSueldos, ...(body as Partial<typeof configSueldos>) };
+    return ok({ ...configSueldos });
   }
 
   // ── Usuarios ──

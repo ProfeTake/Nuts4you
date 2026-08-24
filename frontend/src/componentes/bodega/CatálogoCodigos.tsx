@@ -1,3 +1,8 @@
+/* eslint-disable react-refresh/only-export-components --
+   El archivo exporta UN solo componente (CatálogoCodigos); TarjetaBarcode es un
+   sub-componente privado que solo tiene sentido acá. Sacarlo a otro archivo solo
+   para satisfacer la frontera de Fast Refresh dispersaría código muy acoplado a
+   cambio de un beneficio de dev, no de runtime. */
 // ─── CatálogoCodigos ─────────────────────────────────────────────────────────
 // Catálogo fijo de los 15 productos del sistema con códigos EAN-13 pre-asignados
 // (prefijo Chile 780). Permite descarga PNG e impresión individual o total.
@@ -7,6 +12,7 @@ import { useEffect, useRef, useCallback } from "react";
 import JsBarcode from "jsbarcode";
 import { Download, Printer, PrinterCheck } from "lucide-react";
 import { toast } from "sonner";
+import { compararCategorias, compararProductos } from "@/lib/categorias";
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -47,7 +53,11 @@ const CATALOGO: ProductoCatalogo[] = [
   { id: 15, sigla: "HLD",   nombre: "Helados",              categoria: "Helados",  codigo: "7800000000153", precioVenta: 1000 },
 ];
 
-const CATEGORIAS_ORDEN: Categoria[] = ["Mezclas", "Paquetes", "Promos", "Líquidos", "Helados"];
+// Derivado del catálogo y ordenado con la regla compartida, en vez de repetir la
+// secuencia a mano: una lista hardcodeada acá se despega de lib/categorias apenas
+// alguien agrega o renombra una categoría.
+const CATEGORIAS_ORDEN: Categoria[] = [...new Set(CATALOGO.map((p) => p.categoria))]
+  .sort(compararCategorias);
 
 const COLOR_CAT: Record<Categoria, string> = {
   Mezclas:  "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700/40",
@@ -267,7 +277,12 @@ export function CatálogoCodigos() {
 
       {/* Grupos por categoría */}
       {CATEGORIAS_ORDEN.map(cat => {
-        const items = CATALOGO.filter(p => p.categoria === cat);
+        // Mismo orden que el resto de la app dentro de cada categoría.
+        const items = CATALOGO.filter(p => p.categoria === cat)
+          .sort((a, b) => compararProductos(
+            { productoId: a.id, categoria: a.categoria },
+            { productoId: b.id, categoria: b.categoria },
+          ));
         return (
           <section key={cat}>
             <div className="mb-3 flex items-center gap-2">

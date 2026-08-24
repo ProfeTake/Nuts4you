@@ -175,6 +175,27 @@ function FilaFactura({
             </div>
           )}
 
+          {/* Datos bancarios del proveedor (para pagar sin ir a la pestaña Proveedores) */}
+          {(factura.proveedorBanco || factura.proveedorNumeroCuenta) && (
+            <div className="mt-3 rounded-lg border bg-background/60 px-3 py-2">
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5 mb-1">
+                <Landmark className="size-3" />
+                Datos para transferir
+              </p>
+              <div className="text-xs text-foreground space-y-0.5">
+                {factura.proveedorBanco && (
+                  <p><span className="text-muted-foreground">Banco:</span> {factura.proveedorBanco}</p>
+                )}
+                {factura.proveedorTipoCuenta && (
+                  <p><span className="text-muted-foreground">Tipo de cuenta:</span> {factura.proveedorTipoCuenta}</p>
+                )}
+                {factura.proveedorNumeroCuenta && (
+                  <p><span className="text-muted-foreground">N° de cuenta:</span> <span className="font-medium tabular-nums">{factura.proveedorNumeroCuenta}</span></p>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Acciones */}
           <div className="flex items-center gap-2 mt-4 flex-wrap">
             {factura.estado === "PENDIENTE" && (
@@ -810,7 +831,9 @@ export function GestorFacturas() {
           <div className="flex flex-wrap gap-3 items-center">
             <Select value={mes} onValueChange={(v) => setMes(v ?? mes)}>
               <SelectTrigger className="w-44">
-                <SelectValue />
+                {/* La etiqueta va como children: Base UI muestra el value crudo
+                    si no se le pasa (decía "2026-08" en vez de "Agosto 2026"). */}
+                <SelectValue>{labelMes(mes)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {meses.map((m) => (
@@ -821,7 +844,11 @@ export function GestorFacturas() {
 
             <Select value={filtroProv} onValueChange={(v) => setFiltroProv(v ?? "TODOS")}>
               <SelectTrigger className="w-48">
-                <SelectValue placeholder="Todos los proveedores" />
+                <SelectValue placeholder="Todos los proveedores">
+                  {filtroProv === "TODOS"
+                    ? "Todos los proveedores"
+                    : proveedores.find((p) => String(p.id) === filtroProv)?.nombre}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="TODOS">Todos los proveedores</SelectItem>
@@ -833,7 +860,9 @@ export function GestorFacturas() {
 
             <Select value={filtroEst} onValueChange={(v) => setFiltroEst(v as EstadoFactura | "TODOS")}>
               <SelectTrigger className="w-40">
-                <SelectValue placeholder="Todos los estados" />
+                <SelectValue placeholder="Todos los estados">
+                  {filtroEst === "TODOS" ? "Todos" : ESTADO_CONFIG[filtroEst].label}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="TODOS">Todos</SelectItem>

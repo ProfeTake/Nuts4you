@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { apiGet, apiPost } from "@/lib/api";
+import { compararCategorias, compararProductos } from "@/lib/categorias";
 import type { PDVItem } from "@/tipos/admin.tipos";
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -117,7 +118,8 @@ export function FormularioDespacho() {
   // Filas con cantidad > 0, derivadas del stock fresco + el mapa de cantidades.
   const itemsConCantidad = stock
     .map((s) => ({ ...s, cantidad: parseInt(cantidades[s.inventarioId] ?? "", 10) || 0 }))
-    .filter((s) => s.cantidad > 0);
+    .filter((s) => s.cantidad > 0)
+    .sort(compararProductos); // el resumen sigue el mismo orden que la tabla
 
   const erroresStock = itemsConCantidad.filter((i) => i.cantidad > i.stockActual);
 
@@ -139,8 +141,10 @@ export function FormularioDespacho() {
   };
 
   // ── Agrupar items por categoría ───────────────────────────────────────────
+  // Mismo orden que el Turno Activo del vendedor (Mezclas → Paquetes → Líquidos):
+  // la API los devuelve alfabéticos y quien despacha buscaba a ciegas.
 
-  const categorias = [...new Set(stock.map((s) => s.categoria))];
+  const categorias = [...new Set(stock.map((s) => s.categoria))].sort(compararCategorias);
 
   const cargando = cargandoPdvs || cargandoStock;
 
@@ -191,7 +195,7 @@ export function FormularioDespacho() {
       {/* ── Tabla de items ── */}
       <div className="space-y-4">
         {categorias.map((cat) => {
-          const grupo = stock.filter((s) => s.categoria === cat);
+          const grupo = stock.filter((s) => s.categoria === cat).sort(compararProductos);
           return (
             <div key={cat} className="rounded-xl border overflow-hidden">
               <div className="bg-muted px-4 py-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">

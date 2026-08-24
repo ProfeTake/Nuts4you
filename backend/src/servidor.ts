@@ -22,6 +22,10 @@ const origenesPermitidos =
     : ["http://localhost:5173", "http://localhost:4173"];
 
 app.use(cors({ origin: origenesPermitidos }));
+// Las solicitudes de gasto adjuntan la foto del boucher en base64: necesitan un
+// límite mayor. Se aplica SOLO a esa ruta (parsea antes que el parser global, que
+// luego se salta porque el body ya quedó parseado). El resto sigue en 100kb.
+app.use("/api/solicitudes-gasto", express.json({ limit: "6mb" }));
 app.use(express.json({ limit: "100kb" }));
 app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 

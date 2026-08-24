@@ -2,12 +2,13 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { autenticar } from '../middlewares/autenticar'
 import { autorizar } from '../middlewares/autorizar'
+import { fechaHoyChile } from '../lib/tiempoChile'
 import {
   getResumenDiario, getVentasSucursal, getPDVs,
   crearPDV, editarPDV, toggleEstadoPDV, eliminarPDV,
   getHistorialFaltantesVendedor, getHistorialTurnosSucursal,
+  getTurnosActivosDetalle,
 } from '../servicios/admin.servicio'
-import { guardarRegistroDiario, getRegistroDiario } from '../servicios/reporte.servicio'
 
 const router = Router()
 
@@ -47,7 +48,6 @@ router.post('/pdvs',
       const data = await crearPDV(parsed.data.nombre, parsed.data.tipo)
       res.status(201).json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -68,7 +68,6 @@ router.patch('/pdvs/:id',
       const data = await editarPDV(id, parsed.data.nombre)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(404).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -89,7 +88,6 @@ router.patch('/pdvs/:id/estado',
       const data = await toggleEstadoPDV(id, parsed.data.activo)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -105,7 +103,6 @@ router.delete('/pdvs/:id',
       await eliminarPDV(id)
       res.json({ data: { mensaje: 'Punto de venta eliminado' } })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -119,13 +116,24 @@ router.get('/resumen-diario',
   autorizar('ADMIN', 'SUPERVISOR'),
   async (req, res, next) => {
     let fecha = typeof req.query.fecha === 'string' ? req.query.fecha : ''
-    if (!fecha) {
-      const ahora   = new Date()
-      const chileMs = ahora.getTime() - 4 * 3_600_000
-      fecha = new Date(chileMs).toISOString().split('T')[0]
-    }
+    if (!fecha) fecha = fechaHoyChile()
     try {
       const data = await getResumenDiario(fecha)
+      res.json({ data })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
+
+/** GET /api/admin/turnos-activos — Turnos abiertos ahora (panel de Sucursales),
+ *  con desde cuándo está abierto cada punto, caja chica, retiros y gastos. */
+router.get('/turnos-activos',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR'),
+  async (_req, res, next) => {
+    try {
+      const data = await getTurnosActivosDetalle()
       res.json({ data })
     } catch (error) {
       next(error)
@@ -184,49 +192,6 @@ router.get('/vendedores/:id/faltantes',
       const data = await getHistorialFaltantesVendedor(id)
       res.json({ data })
     } catch (error) { next(error) }
-  }
-)
-
-const registroDiarioSchema = z.object({
-  pdvId: z.number().int().positive(),
-  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato YYYY-MM-DD requerido'),
-  datos: z.record(z.string(), z.unknown()),
-})
-
-/** POST /api/admin/registro-diario */
-router.post('/registro-diario',
-  autenticar,
-  autorizar('ADMIN', 'SUPERVISOR', 'VENDEDOR'),
-  async (req, res, next) => {
-    const parsed = registroDiarioSchema.safeParse(req.body)
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Datos inválidos', detalle: parsed.error.flatten() })
-      return
-    }
-    const { pdvId, fecha, datos } = parsed.data
-    try {
-      const result = await guardarRegistroDiario(pdvId, fecha, datos)
-      res.json({ data: result })
-    } catch (error) {
-      next(error)
-    }
-  }
-)
-
-/** GET /api/admin/registro-diario?pdvId=X&fecha=Y */
-router.get('/registro-diario',
-  autenticar,
-  async (req, res, next) => {
-    const pdvId = parseInt(req.query.pdvId as string)
-    const fecha = typeof req.query.fecha === 'string' ? req.query.fecha : ''
-    if (isNaN(pdvId) || !fecha) { res.status(400).json({ error: 'Se requieren pdvId y fecha' }); return }
-    try {
-      const data = await getRegistroDiario(pdvId, fecha)
-      if (!data) { res.status(404).json({ error: 'No hay registro' }); return }
-      res.json({ data })
-    } catch (error) {
-      next(error)
-    }
   }
 )
 

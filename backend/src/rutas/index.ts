@@ -15,6 +15,9 @@ import rutasNotificaciones from "./notificaciones.rutas";
 import rutasProveedores       from "./proveedores.rutas";
 import rutasCierrePreventivo  from "./cierrePreventivo.rutas";
 import rutasConfigBono        from "./configBono.rutas";
+import rutasConfigNomina      from "./configNomina.rutas";
+import rutasPreparacion       from "./preparacion.rutas";
+import rutasGastoAutorizacion from "./gastoAutorizacion.rutas";
 
 const rutaPrincipal = Router();
 
@@ -32,5 +35,8 @@ rutaPrincipal.use("/notificaciones", rutasNotificaciones);
 rutaPrincipal.use("/proveedores",          rutasProveedores);
 rutaPrincipal.use("/cierres-preventivos",  rutasCierrePreventivo);
 rutaPrincipal.use("/config-bonos",         rutasConfigBono);
+rutaPrincipal.use("/config-nomina",        rutasConfigNomina);
+rutaPrincipal.use("/preparaciones",        rutasPreparacion);
+rutaPrincipal.use("/solicitudes-gasto",    rutasGastoAutorizacion);
 
 export default rutaPrincipal;

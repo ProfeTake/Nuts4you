@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { useMenuNav } from "@/componentes/layout/BarraLateral";
+import { useMenuNav } from "@/componentes/layout/contexto-menu";
 import { inventarioInicialMock } from "@/datos/mock.datos";
 import { useCajaStore } from "@/store/caja.store";
+import { compararCategorias, compararProductos } from "@/lib/categorias";
 import { Menu, Save } from "lucide-react";
 
 export default function InventarioPDV() {
@@ -41,7 +42,8 @@ export default function InventarioPDV() {
     });
   };
 
-  const categorias = [...new Set(items.map((i) => i.categoria))];
+  // Mismo orden que el Turno Activo (Mezclas → Paquetes → Líquidos).
+  const categorias = [...new Set(items.map((i) => i.categoria))].sort(compararCategorias);
 
   return (
     <div className="flex h-full flex-col">
@@ -107,6 +109,7 @@ export default function InventarioPDV() {
               </tr>,
               ...items
                 .filter((i) => i.categoria === cat)
+                .sort(compararProductos)
                 .map((item) => (
                   <tr key={item.productoId} className="bg-background">
                     <td className="border border-border px-2 py-1.5 font-medium text-foreground">

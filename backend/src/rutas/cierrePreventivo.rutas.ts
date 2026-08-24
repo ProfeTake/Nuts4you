@@ -6,6 +6,9 @@ import {
   registrarCierrePreventivo,
   getCierresPreventivos,
   getCierresHoy,
+  getTurnosActivos,
+  getNotaVendedorVigente,
+  getMisCierresPreventivos,
   eliminarCierrePreventivo,
   getTareasChecklist,
   crearTareaChecklist,
@@ -21,6 +24,50 @@ router.get('/hoy',
   async (_req, res, next) => {
     try {
       const data = await getCierresHoy()
+      res.json({ data })
+    } catch (error) { next(error) }
+  }
+)
+
+/** GET /api/cierres-preventivos/turnos-activos — Turnos abiertos ahora, para
+ *  elegir a cuál hacerle el cierre preventivo. */
+router.get('/turnos-activos',
+  autenticar,
+  autorizar('ADMIN', 'SUPERVISOR'),
+  async (_req, res, next) => {
+    try {
+      const data = await getTurnosActivos()
+      res.json({ data })
+    } catch (error) { next(error) }
+  }
+)
+
+/**
+ * GET /api/cierres-preventivos/nota-vendedor — Nota/tarea vigente para el vendedor.
+ * El vendedor lee la de SU PDV; admin/supervisor pueden pasar ?pdvId= para revisar.
+ */
+router.get('/nota-vendedor',
+  autenticar,
+  async (req, res, next) => {
+    const esAdmin = req.usuario!.rol === 'ADMIN' || req.usuario!.rol === 'SUPERVISOR'
+    const pdvId = esAdmin && req.query.pdvId
+      ? parseInt(req.query.pdvId as string)
+      : req.usuario!.pdvId
+    if (!pdvId) { res.status(400).json({ error: 'Sin PDV asignado' }); return }
+    try {
+      const data = await getNotaVendedorVigente(pdvId)
+      res.json({ data })
+    } catch (error) { next(error) }
+  }
+)
+
+/** GET /api/cierres-preventivos/mios — Cierres preventivos ocurridos durante los
+ *  turnos del propio vendedor, para su historial "Mis Cierres". */
+router.get('/mios',
+  autenticar,
+  async (req, res, next) => {
+    try {
+      const data = await getMisCierresPreventivos(req.usuario!.id)
       res.json({ data })
     } catch (error) { next(error) }
   }
@@ -56,7 +103,6 @@ router.post('/',
       const data = await registrarCierrePreventivo(req.usuario.id, parsed.data)
       res.status(201).json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -99,7 +145,6 @@ router.delete('/tareas/:id',
       const data = await eliminarTareaChecklist(id)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -116,7 +161,6 @@ router.delete('/:id',
       const data = await eliminarCierrePreventivo(id)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }

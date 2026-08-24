@@ -9,11 +9,18 @@ import type {
 
 // ─── Categorías reales del negocio ───────────────────────────────────────────
 
+// Los ids replican EXACTAMENTE los de la tabla `Categoria` en BD: lib/categorias
+// resuelve la categoría de un producto desde acá para ordenar todas las listas,
+// así que si se despegan de la BD el orden deja de coincidir con lo que muestra
+// el panel admin (que lee la categoría real vía Prisma).
 export const categoriasMock: Categoria[] = [
   { id: 1, nombre: "Mezclas" },
   { id: 2, nombre: "Paquetes" },
   { id: 3, nombre: "Promos" },
   { id: 4, nombre: "Líquidos" },
+  { id: 5, nombre: "Helados" },
+  { id: 6, nombre: "Otros" },
+  { id: 7, nombre: "Conos" },
 ];
 
 // ─── Catálogo real de productos ──────────────────────────────────────────────
@@ -24,7 +31,7 @@ export const productosMock: Producto[] = [
   { id: 2,  categoriaId: 1, nombre: "Mezcla Almendras",      precioVenta:    0, activo: true },
   { id: 3,  categoriaId: 1, nombre: "Mezcla Nueces",         precioVenta:    0, activo: true },
   { id: 4,  categoriaId: 1, nombre: "Mezcla Promo",          precioVenta:    0, activo: true },
-  { id: 5,  categoriaId: 1, nombre: "Mezcla Helado",       precioVenta:    0, activo: true },
+  { id: 5,  categoriaId: 1, nombre: "Mezcla de Helados",     precioVenta:    0, activo: true },
   // Paquetes
   { id: 6,  categoriaId: 2, nombre: "Paquetes Maní",         precioVenta:  800, activo: true },
   { id: 7,  categoriaId: 2, nombre: "Paquetes Almendras",    precioVenta: 1000, activo: true },
@@ -37,8 +44,10 @@ export const productosMock: Producto[] = [
   { id: 12, categoriaId: 4, nombre: "Energéticas",           precioVenta: 1500, activo: true },
   { id: 13, categoriaId: 4, nombre: "Bebidas",               precioVenta: 1500, activo: true },
   { id: 14, categoriaId: 4, nombre: "Jugos Kapo",            precioVenta:  500, activo: true },
-  // Helados
-  { id: 15, categoriaId: 3, nombre: "Helados",               precioVenta: 1000, activo: true },
+  // Helados — categoría propia (decisión del negocio), no cuelga de Promos
+  { id: 15, categoriaId: 5, nombre: "Helados",               precioVenta: 1000, activo: true },
+  // Conos (materia prima; precio editable por el admin, aún sin valor)
+  { id: 16, categoriaId: 7, nombre: "Conos",                 precioVenta:    0, activo: true },
 ];
 
 // ─── Inventario inicial mock (stock esperado al abrir turno) ─────────────────
@@ -49,7 +58,7 @@ export const inventarioInicialMock: ItemInventarioInicial[] = [
   { productoId: 2,  nombre: "Mezcla Almendras",     categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
   { productoId: 3,  nombre: "Mezcla Nueces",        categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
   { productoId: 4,  nombre: "Mezcla Promo",         categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
-  { productoId: 5,  nombre: "Mezcla Helado",      categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 5,  nombre: "Mezcla de Helados",    categoria: "Mezclas",  inicio: 0, ingreso: 0, verificado: false },
   // Paquetes
   { productoId: 6,  nombre: "Paquetes Maní",        categoria: "Paquetes", inicio: 0, ingreso: 0, verificado: false },
   { productoId: 7,  nombre: "Paquetes Almendras",   categoria: "Paquetes", inicio: 0, ingreso: 0, verificado: false },
@@ -63,5 +72,7 @@ export const inventarioInicialMock: ItemInventarioInicial[] = [
   { productoId: 13, nombre: "Bebidas",              categoria: "Líquidos", inicio: 0, ingreso: 0, verificado: false },
   { productoId: 14, nombre: "Jugos Kapo",           categoria: "Líquidos", inicio: 0, ingreso: 0, verificado: false },
   // Helados
-  { productoId: 15, nombre: "Helados",              categoria: "Promos",   inicio: 0, ingreso: 0, verificado: false },
+  { productoId: 15, nombre: "Helados",              categoria: "Helados",  inicio: 0, ingreso: 0, verificado: false },
+  // Conos
+  { productoId: 16, nombre: "Conos",                categoria: "Conos",    inicio: 0, ingreso: 0, verificado: false },
 ];

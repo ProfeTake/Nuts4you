@@ -26,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatearCLP } from "@/lib/money";
 import { inventarioInicialMock } from "@/datos/mock.datos";
+import { compararCategorias, compararProductos } from "@/lib/categorias";
 import type {
   SesionPOS,
   PasoApertura,
@@ -44,6 +45,18 @@ const ETIQUETA_PASO: Record<PasoApertura, string> = {
 };
 
 const MONTOS_RAPIDOS = [20_000, 50_000, 100_000, 150_000];
+
+// Caja chica estándar del negocio (D5/A31): el saldo inicial se precarga con
+// este monto y queda editable — en festivos u ocasiones especiales puede variar,
+// por eso NO se fuerza ni se hereda del cierre anterior (decisión del cliente).
+const CAJA_CHICA_DEFAULT = 20_000;
+
+// Fecha local de hoy como YYYY-MM-DD (en operación el navegador está en Chile).
+const fechaHoyISO = () => {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 
 // ─── Props ──────────────────────────────────────────────────────────────────
 
@@ -68,15 +81,14 @@ export default function AperturaTurno({
   onVolverAdmin,
 }: AperturaTurnoProps) {
   const [pasoActual, setPasoActual] = useState<PasoApertura>(pasoInicial);
-  const [saldoInicial, setSaldoInicial] = useState(0);
-  const [saldoTexto, setSaldoTexto] = useState("");
+  // Precargado con la caja chica estándar ($20.000), editable por la vendedora.
+  const [saldoInicial, setSaldoInicial] = useState(CAJA_CHICA_DEFAULT);
+  const [saldoTexto, setSaldoTexto] = useState(CAJA_CHICA_DEFAULT.toLocaleString("es-CL"));
   const [itemsInventario, setItemsInventario] = useState<ItemInventarioInicial[]>(
     () => inventarioInicialMock.map((item) => ({ ...item }))
   );
-  // Estado de texto para cada input (evita conflictos con inputs numéricos)
-  const [textosIngreso, setTextosIngreso] = useState<Record<number, string>>(
-    () => Object.fromEntries(inventarioInicialMock.map((i) => [i.productoId, ""]))
-  );
+  // Indica si el admin dejó un ingreso preparado para hoy (para el mensaje de ayuda).
+  const [hayIngresoPreparado, setHayIngresoPreparado] = useState(false);
   const inputSaldoRef = useRef<HTMLInputElement>(null);
 
   const indicePaso = PASOS.indexOf(pasoActual);
@@ -97,6 +109,25 @@ export default function AperturaTurno({
       );
     }).catch(() => {
       // Sin inventario previo: queda en 0 (primera vez)
+    });
+  }, [pdv?.id]);
+
+  // Cargar el INGRESO preparado por el admin/supervisor para hoy. Es solo lectura:
+  // la vendedora solo verifica que el inventario recibido esté correcto.
+  useEffect(() => {
+    if (!pdv?.id) return;
+    apiGet<{ data: { estado: string; items: { productoId: number; cantidad: number }[] } | null }>(
+      `/preparaciones/pdv/${pdv.id}?fecha=${fechaHoyISO()}`
+    ).then(res => {
+      const prep = res.data;
+      if (!prep || prep.estado === "ANULADA") return;
+      const porId = new Map(prep.items.map(i => [i.productoId, i.cantidad]));
+      setHayIngresoPreparado(prep.items.some(i => i.cantidad > 0));
+      setItemsInventario(prev =>
+        prev.map(item => ({ ...item, ingreso: porId.get(item.productoId) ?? 0 }))
+      );
+    }).catch(() => {
+      // Sin preparación para hoy: el ingreso queda en 0
     });
   }, [pdv?.id]);
 
@@ -132,32 +163,12 @@ export default function AperturaTurno({
   };
 
   // ── Manejo del inventario ──
-  // INICIO = saldo del día anterior, viene precargado y no es editable en apertura.
-  // ING = ingresos recibidos durante el turno.
-
-  const actualizarIngreso = (productoId: number, valor: string) => {
-    setTextosIngreso((prev) => ({ ...prev, [productoId]: valor }));
-    const cantidad = parseInt(valor, 10);
-    setItemsInventario((prev) =>
-      prev.map((item) =>
-        item.productoId === productoId
-          ? { ...item, ingreso: isNaN(cantidad) ? 0 : cantidad, verificado: true }
-          : item
-      )
-    );
-  };
+  // INICIO = saldo del día anterior, precargado desde el stock del PDV (solo lectura).
+  // ING = ingreso preparado por el admin/supervisor para hoy (solo lectura).
+  // La vendedora únicamente verifica que lo recibido coincida.
 
   const marcarTodoRevisado = () => {
-    setItemsInventario((prev) =>
-      prev.map((item) => {
-        const ingreso = parseInt(textosIngreso[item.productoId] ?? "", 10);
-        return {
-          ...item,
-          ingreso: isNaN(ingreso) ? item.ingreso : ingreso,
-          verificado: true,
-        };
-      })
-    );
+    setItemsInventario((prev) => prev.map((item) => ({ ...item, verificado: true })));
   };
 
   const todosVerificados = itemsInventario.every((i) => i.verificado);
@@ -313,7 +324,7 @@ export default function AperturaTurno({
         </div>
         <CardTitle className="text-lg">Apertura de Caja</CardTitle>
         <CardDescription>
-          Ingresa el monto en efectivo con el que inicias tu turno
+          La caja chica estándar es de {formatearCLP(CAJA_CHICA_DEFAULT)} — ajusta el monto solo si hoy es distinto (ej: festivos)
         </CardDescription>
       </CardHeader>
 
@@ -396,7 +407,12 @@ export default function AperturaTurno({
   // Tabla estilo planilla papel: ITEM | INICIO | ING, agrupado por categoría
 
   const fechaHoy = new Date().toLocaleDateString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit" });
-  const categorias = [...new Set(itemsInventario.map((i) => i.categoria))];
+  // Orden canónico, el mismo del Turno Activo. Antes dependía del orden del array
+  // de inventario: funcionaba de casualidad porque el mock viene ordenado a mano,
+  // y se habría roto apenas los ítems vinieran de la API (que los devuelve por
+  // categoría alfabética). La apertura y el cierre tienen que listar igual: es la
+  // misma persona contando los mismos productos.
+  const categorias = [...new Set(itemsInventario.map((i) => i.categoria))].sort(compararCategorias);
 
   const pasoInventario = (
     <div className="flex h-full flex-col">
@@ -408,7 +424,9 @@ export default function AperturaTurno({
         <div>
           <h2 className="text-base font-semibold text-foreground">Inventario Inicial</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Registra las unidades disponibles al abrir el turno
+            {hayIngresoPreparado
+              ? "Verifica que el saldo (INICIO) y el ingreso preparado (ING) coincidan con lo recibido"
+              : "Verifica las unidades disponibles al abrir el turno"}
           </p>
         </div>
 
@@ -428,7 +446,7 @@ export default function AperturaTurno({
       </div>
 
       {/* Tabla de inventario — scrollable */}
-      <div className="flex-1 overflow-y-auto px-3 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
         <table className="w-full border-collapse text-sm">
           <thead>
             {/* Fila vendedor + fecha */}
@@ -469,6 +487,7 @@ export default function AperturaTurno({
               /* Filas de producto */
               ...itemsInventario
                 .filter((i) => i.categoria === cat)
+                .sort(compararProductos)
                 .map((item) => (
                   <tr
                     key={item.productoId}
@@ -485,20 +504,13 @@ export default function AperturaTurno({
                     <td className="border border-border px-2 py-1.5 text-center text-sm font-semibold tabular-nums text-muted-foreground bg-muted/40">
                       {item.inicio}
                     </td>
-                    {/* ING — editable */}
-                    <td className="border border-border p-0.5">
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        value={textosIngreso[item.productoId] ?? ""}
-                        placeholder="0"
-                        onChange={(e) => {
-                          const soloNum = e.target.value.replace(/\D/g, "");
-                          actualizarIngreso(item.productoId, soloNum);
-                        }}
-                        className="w-full rounded bg-transparent py-1.5 text-center text-sm font-semibold tabular-nums outline-none focus:bg-primary/5 focus:ring-1 focus:ring-primary/40"
-                      />
+                    {/* ING — preparado por el admin, solo lectura */}
+                    <td className="border border-border px-2 py-1.5 text-center text-sm font-semibold tabular-nums text-foreground">
+                      {item.ingreso > 0 ? (
+                        item.ingreso
+                      ) : (
+                        <span className="text-muted-foreground/50">—</span>
+                      )}
                     </td>
                   </tr>
                 )),
@@ -532,7 +544,7 @@ export default function AperturaTurno({
   // Los pasos 1 y 2 son tarjetas centradas con scroll externo si son más altas que la pantalla
   if (pasoActual === "inventario") {
     return (
-      <div className="flex h-screen flex-col bg-gradient-to-b from-background to-muted/30">
+      <div className="flex h-dvh flex-col bg-gradient-to-b from-background to-muted/30">
         {/* Cabecera fija: Logo + indicador de pasos */}
         <div className="shrink-0 px-4 pb-2 pt-5">
           <h1 className="mb-4 text-center text-xl font-bold text-foreground">
@@ -550,7 +562,7 @@ export default function AperturaTurno({
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-background to-muted/30 p-4">
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-gradient-to-b from-background to-muted/30 p-4">
       {/* Botón volver al panel (solo admin/supervisor) */}
       {onVolverAdmin && (
         <button

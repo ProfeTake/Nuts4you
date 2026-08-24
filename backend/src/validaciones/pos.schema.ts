@@ -23,6 +23,21 @@ export const cerrarTurnoSchema = z.object({
     productoId: z.number().int().positive(),
     cantidad:   z.number().int().min(0),
   })).optional().default([]),
+  // Detalle de ventas por producto (unidades vendidas × precio snapshot).
+  // Solo para el panel admin de Cierre de turno; el vendedor no ve montos.
+  ventaDetalle: z.array(z.object({
+    productoId:     z.number().int().positive(),
+    cantidad:       z.number().int().min(0),
+    precioUnitario: z.number().int().min(0),
+  })).optional().default([]),
+})
+
+// ─── Recepción del dinero (2ª etapa del cierre: admin/supervisor) ─────────────
+// El admin/supervisor cuenta el efectivo recibido en mano del vendedor y da
+// término al turno. Solo aplica a turnos ya cerrados por el vendedor.
+
+export const recepcionTurnoSchema = z.object({
+  dineroRecibido: z.number().int().min(0),
 })
 
 // ─── Retiro de dinero del punto ───────────────────────────────────────────────
@@ -39,7 +54,8 @@ export const gastoSchema = z.object({
   monto:       z.number().int().positive(),
 })
 
-export type AbrirTurnoInput  = z.infer<typeof abrirTurnoSchema>
-export type CerrarTurnoInput = z.infer<typeof cerrarTurnoSchema>
-export type RetiroInput       = z.infer<typeof retiroSchema>
-export type GastoInput        = z.infer<typeof gastoSchema>
+export type AbrirTurnoInput     = z.infer<typeof abrirTurnoSchema>
+export type CerrarTurnoInput    = z.infer<typeof cerrarTurnoSchema>
+export type RecepcionTurnoInput = z.infer<typeof recepcionTurnoSchema>
+export type RetiroInput         = z.infer<typeof retiroSchema>
+export type GastoInput          = z.infer<typeof gastoSchema>

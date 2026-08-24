@@ -4,32 +4,25 @@
 //
 // COMPONENTE REUTILIZABLE — Diseñado para ser compartido entre todos los roles:
 //   • ADMIN:     Dashboard, Reportes, Sucursales, Bodega, Finanzas, RRHH.
-//   • VENDEDOR:  Turno activo, Inventario PDV, Historial, Cierre de Caja, Registro Diario.
+//   • VENDEDOR:  Turno activo, Inventario PDV, Historial, Cierre de Caja.
 //   • BODEGUERO: Inventario, Traspasos, Recepciones.
 //
 // Usa React Router (useNavigate + useLocation) para navegación y estado activo.
 // El prop `children` se renderiza como contenido principal a la derecha del nav.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, createContext, useContext } from "react";
+import { useState } from "react";
+import { ContextoMenu } from "./contexto-menu";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatearCLP } from "@/lib/money";
 import type { SesionPOS, PaginaVendedor } from "@/tipos/pos.tipos";
-import { Menu, ChevronsLeft, User, Store, Clock, Archive, LayoutDashboard, LogOut, PackagePlus, ArrowLeft, ClipboardList } from "lucide-react";
+import { Menu, ChevronsLeft, User, Store, Clock, Archive, LayoutDashboard, LogOut, PackagePlus, ArrowLeft } from "lucide-react";
 import { PanelNotificaciones } from "./PanelNotificaciones";
 
-// ─── Contexto del menú ────────────────────────────────────────────────────
-// Permite que cualquier página hija abra el sidebar desde su propio header
-
-interface ContextoMenuValor {
-  abrirMenu: () => void;
-}
-
-const ContextoMenu = createContext<ContextoMenuValor>({ abrirMenu: () => {} });
-export const useMenuNav = () => useContext(ContextoMenu);
+// El contexto y `useMenuNav` viven en ./contexto-menu — ver el porqué allí.
 
 // ─── Mapa de rutas por página del vendedor ──────────────────────────────────
 
@@ -38,8 +31,8 @@ const RUTAS_VENDEDOR: Record<PaginaVendedor, string> = {
   "inventario":      "/pos/inventario",
   "historial":       "/pos/historial",
   "cierre-caja":     "/pos/cierre-caja",
-  "registro-diario": "/pos/registro-diario",
   "solicitudes":     "/pos/solicitudes",
+  "mis-cierres":     "/pos/mis-cierres",
 };
 
 // ─── Items de navegación por rol ────────────────────────────────────────────
@@ -54,8 +47,8 @@ interface ItemNav {
 
 const itemsVendedor: ItemNav[] = [
   { id: "pos",             etiqueta: "Turno Activo",    icono: <LayoutDashboard size={18} /> },
-  { id: "registro-diario", etiqueta: "Registro Diario", icono: <ClipboardList size={18} /> },
   { id: "solicitudes",     etiqueta: "Solicitudes",     icono: <PackagePlus size={18} /> },
+  { id: "mis-cierres",     etiqueta: "Mis Cierres",     icono: <Archive size={18} /> },
 ];
 
 // ─── Props ──────────────────────────────────────────────────────────────────
@@ -212,9 +205,10 @@ export default function BarraLateral({ sesion, horaApertura, onCerrarSesion, onV
         ))}
       </nav>
 
-      {/* Notificaciones + Footer */}
+      {/* Notificaciones + Footer — scoped al PDV del turno actual: el vendedor
+          solo ve avisos de esta sucursal (+ globales), no los de otro PDV suyo. */}
       <div className="border-t px-2 py-2 flex items-center justify-between">
-        <PanelNotificaciones />
+        <PanelNotificaciones pdvId={turno?.pdvId} />
         {expandido && <span className="text-xs text-muted-foreground">Alertas</span>}
       </div>
 

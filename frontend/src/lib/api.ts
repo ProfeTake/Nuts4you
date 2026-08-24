@@ -54,10 +54,38 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Error de conexión' }))
-    throw new Error(error.error ?? `Error ${response.status}`)
+    const base = error.error ?? `Error ${response.status}`
+    // El backend adjunta `detalle` (Zod flatten) en los 400 de validación.
+    // Lo agregamos al mensaje para que el usuario sepa QUÉ campo corregir,
+    // en vez de un genérico "Datos inválidos".
+    const detalle = detalleValidacion(error.detalle)
+    throw new Error(detalle ? `${base}: ${detalle}` : base)
   }
 
   return response.json()
+}
+
+/**
+ * Extrae un mensaje legible desde el `detalle` de un error de validación Zod
+ * (`z.flatten()` → { formErrors: string[], fieldErrors: Record<string,string[]> }).
+ * Devuelve null si no hay detalle utilizable.
+ */
+function detalleValidacion(detalle: unknown): string | null {
+  if (!detalle || typeof detalle !== 'object') return null
+  const d = detalle as { formErrors?: unknown; fieldErrors?: unknown }
+  const mensajes: string[] = []
+
+  if (Array.isArray(d.formErrors)) {
+    for (const m of d.formErrors) if (typeof m === 'string') mensajes.push(m)
+  }
+  if (d.fieldErrors && typeof d.fieldErrors === 'object') {
+    for (const [campo, errs] of Object.entries(d.fieldErrors as Record<string, unknown>)) {
+      if (Array.isArray(errs)) {
+        for (const m of errs) if (typeof m === 'string') mensajes.push(`${campo}: ${m}`)
+      }
+    }
+  }
+  return mensajes.length ? mensajes.join(' · ') : null
 }
 
 // Atajos

@@ -1,4 +1,5 @@
 import prisma from '../config/prisma'
+import { conflicto } from '../lib/errores'
 import type { CrearProveedorInput, CrearFacturaInput, ActualizarEstadoFacturaInput } from '../validaciones/proveedores.schema'
 
 const PROVEEDOR_SELECT = {
@@ -55,7 +56,7 @@ export async function toggleActivoProveedor(id: number, activo: boolean) {
 export async function eliminarProveedor(id: number) {
   const conFacturas = await prisma.facturaProveedor.count({ where: { proveedor_id: id } })
   if (conFacturas > 0) {
-    throw new Error(`No se puede eliminar: el proveedor tiene ${conFacturas} factura${conFacturas !== 1 ? 's' : ''} registrada${conFacturas !== 1 ? 's' : ''}`)
+    throw conflicto(`No se puede eliminar: el proveedor tiene ${conFacturas} factura${conFacturas !== 1 ? 's' : ''} registrada${conFacturas !== 1 ? 's' : ''}`)
   }
   await prisma.proveedor.delete({ where: { id } })
   return { mensaje: 'Proveedor eliminado', id }
@@ -73,13 +74,18 @@ function mapearFactura(f: {
   estado: string
   notas: string | null
   creado_en: Date
-  proveedor: { nombre: string }
+  proveedor: { nombre: string; banco: string | null; tipo_cuenta: string | null; numero_cuenta: string | null }
   items: { id: number; descripcion: string; cantidad: number; precio_unitario: number }[]
 }) {
   return {
     id:               f.id,
     proveedorId:      f.proveedor_id,
     proveedorNombre:  f.proveedor.nombre,
+    // Datos bancarios del proveedor: viajan con la factura para poder mostrarlos
+    // en el modal "Marcar pagada" sin tener que ir a la pestaña Proveedores (C12).
+    proveedorBanco:        f.proveedor.banco,
+    proveedorTipoCuenta:   f.proveedor.tipo_cuenta,
+    proveedorNumeroCuenta: f.proveedor.numero_cuenta,
     numeroFactura:    f.numero_factura,
     fecha:            f.fecha.toISOString().split('T')[0],
     fechaVencimiento: f.fecha_vencimiento ? f.fecha_vencimiento.toISOString().split('T')[0] : null,
@@ -95,6 +101,13 @@ function mapearFactura(f: {
     })),
   }
 }
+
+const PROVEEDOR_FACTURA_SELECT = {
+  nombre:        true,
+  banco:         true,
+  tipo_cuenta:   true,
+  numero_cuenta: true,
+} as const
 
 export async function getFacturas(filtros: { mes?: string; proveedorId?: number; estado?: string }) {
   const where: Record<string, unknown> = {}
@@ -117,7 +130,7 @@ export async function getFacturas(filtros: { mes?: string; proveedorId?: number;
   const facturas = await prisma.facturaProveedor.findMany({
     where,
     include: {
-      proveedor: { select: { nombre: true } },
+      proveedor: { select: PROVEEDOR_FACTURA_SELECT },
       items:     true,
     },
     orderBy: { fecha: 'desc' },
@@ -146,7 +159,7 @@ export async function crearFactura(data: CrearFacturaInput) {
       },
     },
     include: {
-      proveedor: { select: { nombre: true } },
+      proveedor: { select: PROVEEDOR_FACTURA_SELECT },
       items:     true,
     },
   })

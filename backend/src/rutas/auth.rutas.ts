@@ -27,10 +27,8 @@ router.post('/login', loginLimiter, async (req, res, next) => {
     const resultado = await login(parsed.data.rut, parsed.data.password)
     res.json({ data: resultado })
   } catch (error) {
-    if (error instanceof Error && error.message === 'RUT o contraseña incorrectos') {
-      res.status(401).json({ error: error.message })
-      return
-    }
+    // El servicio lanza ErrorApp(401) para credenciales incorrectas;
+    // manejarErrores responde con el estado y mensaje controlados.
     next(error)
   }
 })

@@ -50,7 +50,6 @@ router.post('/',
       const data = await crearProveedor(parsed.data)
       res.status(201).json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -72,7 +71,6 @@ router.patch('/:id',
       const data = await editarProveedor(id, parsed.data)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -94,7 +92,6 @@ router.patch('/:id/activo',
       const data = await toggleActivoProveedor(id, parsed.data.activo)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -111,7 +108,6 @@ router.delete('/:id',
       const data = await eliminarProveedor(id)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -162,7 +158,6 @@ router.post('/facturas',
       const data = await crearFactura(parsed.data)
       res.status(201).json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -184,7 +179,6 @@ router.patch('/facturas/:id/estado',
       const data = await actualizarEstadoFactura(id, parsed.data)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }
@@ -201,7 +195,6 @@ router.delete('/facturas/:id',
       const data = await eliminarFactura(id)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   }

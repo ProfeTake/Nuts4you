@@ -41,7 +41,6 @@ router.put('/:pdvId',
       const data = await guardarTramosPdv(pdvId, parsed.data.tramos)
       res.json({ data })
     } catch (error) {
-      if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
       next(error)
     }
   },

@@ -8,10 +8,13 @@ const TITULOS: Record<string, string> = {
   // Admin
   "/admin/sucursales": "Sucursales",
   "/admin/cierre-preventivo": "Cierre Preventivo",
+  "/admin/preparacion": "Preparación de Turno",
+  "/admin/gastos": "Autorizar Gastos",
   "/admin/bodega": "Bodega",
   "/admin/finanzas": "Finanzas",
   "/admin/facturas": "Facturas",
   "/admin/personal": "Personal y Remuneraciones",
+  "/admin/horarios": "Horarios",
   "/admin/usuarios": "Usuarios",
   "/admin": "Dashboard",
   // POS

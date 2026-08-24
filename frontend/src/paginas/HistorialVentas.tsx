@@ -4,12 +4,13 @@
 
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useMenuNav } from "@/componentes/layout/BarraLateral";
+import { useMenuNav } from "@/componentes/layout/contexto-menu";
 import { Input } from "@/components/ui/input";
 import { formatearCLP } from "@/lib/money";
 import { useCajaStore } from "@/store/caja.store";
 import { apiGet } from "@/lib/api";
 import { Loader2, Menu, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { compararCategorias, compararProductos } from "@/lib/categorias";
 import type { MetodoPago, VentaLocal } from "@/tipos/pos.tipos";
 
 // ─── Tipos de la API ──────────────────────────────────────────────────────────
@@ -60,9 +61,12 @@ const METODO_COLORES: Record<MetodoPago, string> = {
 };
 
 function resumenItems(items: VentaLocal["items"]): string {
-  const primeros = items.slice(0, 2).map((it) => `${it.cantidad}× ${it.nombre}`).join(", ");
-  if (items.length <= 2) return primeros;
-  return `${primeros} +${items.length - 2} más`;
+  // Ordenado como el resto de la app: el resumen tiene que nombrar los mismos dos
+  // primeros productos que encabezan el detalle al abrir la venta.
+  const ordenados = [...items].sort(compararProductos);
+  const primeros = ordenados.slice(0, 2).map((it) => `${it.cantidad}× ${it.nombre}`).join(", ");
+  if (ordenados.length <= 2) return primeros;
+  return `${primeros} +${ordenados.length - 2} más`;
 }
 
 const POR_PAGINA = 25;
@@ -94,7 +98,7 @@ export default function HistorialVentas() {
   const ventas: VentaLocal[] = ventasAPI ?? [...ventasLocal].reverse();
 
   const categorias = useMemo(
-    () => [...new Set(ventas.flatMap((v) => v.items.map((it) => it.categoria)))],
+    () => [...new Set(ventas.flatMap((v) => v.items.map((it) => it.categoria)))].sort(compararCategorias),
     [ventas]
   );
 
@@ -307,7 +311,7 @@ export default function HistorialVentas() {
                 <span className="text-right">Cant.</span>
                 <span className="text-right">Subtotal</span>
               </div>
-              {ventaSeleccionada.items.map((it, idx) => (
+              {[...ventaSeleccionada.items].sort(compararProductos).map((it, idx) => (
                 <div key={idx} className="grid grid-cols-[1fr_auto_auto] gap-x-3 py-1.5 text-sm border-b border-border/40 last:border-0">
                   <div>
                     <span className="font-medium text-foreground">{it.nombre}</span>

@@ -151,7 +151,8 @@ export function PanelAdmin() {
   const toggleSucursal = (id: number) =>
     setExpandidosSuc(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
@@ -492,22 +493,31 @@ export function PanelAdmin() {
                           <td colSpan={6} className="px-4 py-4">
                             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 
-                              {/* Desglose por categoría del mes */}
+                              {/* Desglose por categoría del mes.
+                                  El modelo stock-flow no persiste venta por categoría
+                                  (solo total_calculado), así que hoy llega vacío: sin
+                                  esta guarda se veía un encabezado con nada debajo (C14). */}
                               <div>
                                 <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Venta del mes por categoría</p>
-                                <div className="space-y-1.5">
-                                  {Object.entries(metricas.ventaPorCategoria)
-                                    .sort(([, a], [, b]) => b - a)
-                                    .map(([cat, monto]) => (
-                                      <div key={cat} className="flex items-center justify-between">
-                                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${COLORES_CAT[cat] ?? "bg-muted text-muted-foreground"}`}>
-                                          {cat}
-                                        </span>
-                                        <span className="text-xs font-bold tabular-nums">{formatearCLP(monto)}</span>
-                                      </div>
-                                    ))
-                                  }
-                                </div>
+                                {Object.keys(metricas.ventaPorCategoria).length > 0 ? (
+                                  <div className="space-y-1.5">
+                                    {Object.entries(metricas.ventaPorCategoria)
+                                      .sort(([, a], [, b]) => b - a)
+                                      .map(([cat, monto]) => (
+                                        <div key={cat} className="flex items-center justify-between">
+                                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${COLORES_CAT[cat] ?? "bg-muted text-muted-foreground"}`}>
+                                            {cat}
+                                          </span>
+                                          <span className="text-xs font-bold tabular-nums">{formatearCLP(monto)}</span>
+                                        </div>
+                                      ))
+                                    }
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-muted-foreground italic">
+                                    El detalle por categoría no se registra en el cierre de turno.
+                                  </p>
+                                )}
                               </div>
 
                               {/* Métricas del mes */}

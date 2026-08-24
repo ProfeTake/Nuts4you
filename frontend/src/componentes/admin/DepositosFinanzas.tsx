@@ -21,6 +21,16 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -94,6 +104,13 @@ export function DepositosFinanzas() {
   // Bottom-sheet mobile
   const [detalleId, setDetalleId] = useState<number | null>(null);
 
+  // Confirmación de depósito: captura el monto realmente depositado (C9) y el
+  // método — depósito físico o transferencia bancaria (C10: el estado
+  // TRANSFERENCIA existía con badge y filtro pero ninguna acción lo alcanzaba).
+  const [confirmarId, setConfirmarId] = useState<number | null>(null);
+  const [montoRealInput, setMontoRealInput] = useState("");
+  const [metodoConfirmar, setMetodoConfirmar] = useState<"CONFIRMADO" | "TRANSFERENCIA">("CONFIRMADO");
+
   // ── Cargar depósitos ──
   const {
     data: registros = [],
@@ -111,11 +128,11 @@ export function DepositosFinanzas() {
     [registros, detalleId]
   );
 
-  // ── Mutación: marcar como depositado ──
+  // ── Mutación: marcar como depositado o transferido (con monto real declarado) ──
   const mutacionDeposito = useMutation({
-    mutationFn: (id: number) =>
-      apiPatch<unknown>(`/finanzas/depositos/${id}`, { estado: "CONFIRMADO" }),
-    onSuccess: (_, id) => {
+    mutationFn: ({ id, montoReal, estado }: { id: number; montoReal: number; estado: "CONFIRMADO" | "TRANSFERENCIA" }) =>
+      apiPatch<unknown>(`/finanzas/depositos/${id}`, { estado, montoReal }),
+    onSuccess: (_, { id, montoReal, estado }) => {
       queryClient.setQueryData<RegistroDeposito[]>(
         ["finanzas", "depositos"],
         (prev = []) =>
@@ -123,9 +140,9 @@ export function DepositosFinanzas() {
             r.id === id
               ? {
                   ...r,
-                  montoDepositado: r.montoADepositar,
-                  faltaDepositar: 0,
-                  estado: "Depositado" as EstadoDeposito,
+                  montoDepositado: montoReal,
+                  faltaDepositar: Math.max(0, r.montoADepositar - montoReal),
+                  estado: (estado === "TRANSFERENCIA" ? "Transferencia" : "Depositado") as EstadoDeposito,
                   fechaDeposito: new Date().toISOString().slice(0, 10),
                 }
               : r
@@ -176,23 +193,49 @@ export function DepositosFinanzas() {
     return { totalADepositar, totalDepositado, saldoPendiente, cantPendientes };
   }, [registros]);
 
-  // ── Marcar como depositado ──
-  const marcarDepositado = useCallback(
+  // ── Abrir el diálogo de confirmación (pre-carga el monto teórico a depositar) ──
+  const abrirConfirmacion = useCallback(
     (id: number) => {
       const reg = registros.find((r) => r.id === id);
-      mutacionDeposito.mutate(id, {
-        onSuccess: () => {
-          toast.success("Depósito confirmado", {
-            description: reg
-              ? `${reg.sucursalNombre} — ${formatearCLP(reg.montoADepositar)}`
-              : undefined,
-          });
-          setDetalleId(null);
-        },
-      });
+      setMontoRealInput(reg ? String(reg.montoADepositar) : "");
+      setMetodoConfirmar("CONFIRMADO");
+      setConfirmarId(id);
+      setDetalleId(null);
     },
-    [registros, mutacionDeposito]
+    [registros]
   );
+
+  const regAConfirmar = useMemo(
+    () => registros.find((r) => r.id === confirmarId) ?? null,
+    [registros, confirmarId]
+  );
+
+  // ── Confirmar depósito/transferencia con el monto realmente recibido ──
+  const confirmarDeposito = useCallback(() => {
+    if (confirmarId === null) return;
+    const montoReal = parseInt(montoRealInput, 10);
+    if (isNaN(montoReal) || montoReal < 0) {
+      toast.error("Ingresa un monto válido");
+      return;
+    }
+    const reg = registros.find((r) => r.id === confirmarId);
+    mutacionDeposito.mutate(
+      { id: confirmarId, montoReal, estado: metodoConfirmar },
+      {
+        onSuccess: () => {
+          toast.success(
+            metodoConfirmar === "TRANSFERENCIA" ? "Transferencia confirmada" : "Depósito confirmado",
+            {
+              description: reg
+                ? `${reg.sucursalNombre} — ${formatearCLP(montoReal)}`
+                : undefined,
+            }
+          );
+          setConfirmarId(null);
+        },
+      }
+    );
+  }, [confirmarId, montoRealInput, metodoConfirmar, registros, mutacionDeposito]);
 
   // ── Estado de carga ──
   if (cargando) {
@@ -516,10 +559,10 @@ export function DepositosFinanzas() {
                             size="sm"
                             variant="outline"
                             className="text-xs h-7 border-emerald-500/50 text-emerald-700 hover:bg-emerald-500/10 hover:text-emerald-700"
-                            disabled={mutacionDeposito.isPending && mutacionDeposito.variables === r.id}
-                            onClick={() => marcarDepositado(r.id)}
+                            disabled={mutacionDeposito.isPending && mutacionDeposito.variables?.id === r.id}
+                            onClick={() => abrirConfirmacion(r.id)}
                           >
-                            {mutacionDeposito.isPending && mutacionDeposito.variables === r.id ? (
+                            {mutacionDeposito.isPending && mutacionDeposito.variables?.id === r.id ? (
                               <Loader2 className="size-3 mr-1 animate-spin" />
                             ) : (
                               <CheckCircle2 className="size-3 mr-1" />
@@ -622,10 +665,10 @@ export function DepositosFinanzas() {
                 {detalle.estado === "No depositado" && (
                   <Button
                     className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                    disabled={mutacionDeposito.isPending && mutacionDeposito.variables === detalle.id}
-                    onClick={() => marcarDepositado(detalle.id)}
+                    disabled={mutacionDeposito.isPending && mutacionDeposito.variables?.id === detalle.id}
+                    onClick={() => abrirConfirmacion(detalle.id)}
                   >
-                    {mutacionDeposito.isPending && mutacionDeposito.variables === detalle.id ? (
+                    {mutacionDeposito.isPending && mutacionDeposito.variables?.id === detalle.id ? (
                       <Loader2 className="size-4 mr-1.5 animate-spin" />
                     ) : (
                       <CheckCircle2 className="size-4 mr-1.5" />
@@ -638,6 +681,105 @@ export function DepositosFinanzas() {
           </div>
         </div>
       )}
+
+      {/* ── Diálogo: confirmar depósito con monto real ── */}
+      <Dialog
+        open={confirmarId !== null}
+        onOpenChange={(abierto) => !abierto && setConfirmarId(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {metodoConfirmar === "TRANSFERENCIA" ? "Confirmar transferencia" : "Confirmar depósito"}
+            </DialogTitle>
+            <DialogDescription>
+              {regAConfirmar
+                ? `${regAConfirmar.sucursalNombre} · ${regAConfirmar.vendedor}`
+                : "Indica el monto que realmente llegó al banco."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-1">
+            {/* Método: depósito físico o transferencia bancaria */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setMetodoConfirmar("CONFIRMADO")}
+                className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                  metodoConfirmar === "CONFIRMADO"
+                    ? "border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                    : "text-muted-foreground hover:bg-muted/50"
+                }`}
+              >
+                <Banknote className="size-4" />
+                Depósito
+              </button>
+              <button
+                type="button"
+                onClick={() => setMetodoConfirmar("TRANSFERENCIA")}
+                className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                  metodoConfirmar === "TRANSFERENCIA"
+                    ? "border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-400"
+                    : "text-muted-foreground hover:bg-muted/50"
+                }`}
+              >
+                <ArrowRightLeft className="size-4" />
+                Transferencia
+              </button>
+            </div>
+
+            {regAConfirmar && (
+              <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">A depositar (teórico)</span>
+                <span className="font-semibold tabular-nums">
+                  {formatearCLP(regAConfirmar.montoADepositar)}
+                </span>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label htmlFor="monto-real-deposito">
+                {metodoConfirmar === "TRANSFERENCIA" ? "Monto transferido (real)" : "Monto depositado (real)"}
+              </Label>
+              <Input
+                id="monto-real-deposito"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                value={montoRealInput}
+                onChange={(e) => setMontoRealInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") confirmarDeposito();
+                }}
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground">
+                Ingresa lo que efectivamente llegó al banco. Si difiere del
+                teórico, la diferencia quedará como pendiente por depositar.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmarId(null)}>
+              Cancelar
+            </Button>
+            <Button
+              className={metodoConfirmar === "TRANSFERENCIA"
+                ? "bg-blue-600 hover:bg-blue-700 text-white"
+                : "bg-emerald-600 hover:bg-emerald-700 text-white"}
+              disabled={mutacionDeposito.isPending}
+              onClick={confirmarDeposito}
+            >
+              {mutacionDeposito.isPending ? (
+                <Loader2 className="size-4 mr-1.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="size-4 mr-1.5" />
+              )}
+              {metodoConfirmar === "TRANSFERENCIA" ? "Confirmar transferencia" : "Confirmar depósito"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -32,7 +32,11 @@ function offsetChileMinutos(fechaUtc: Date): number {
     Number(partes.year), Number(partes.month) - 1, Number(partes.day),
     hora, Number(partes.minute), Number(partes.second),
   )
-  return (comoUtc - fechaUtc.getTime()) / 60_000
+  // `comoUtc` se arma sin milisegundos, así que restar un instante con ms deja un
+  // offset fraccionario. Los offsets de zona horaria son múltiplos de minuto: se
+  // redondea para no arrastrar ese residuo (si no, el borde .999 de fin del día
+  // se pasa a la medianoche siguiente).
+  return Math.round((comoUtc - fechaUtc.getTime()) / 60_000)
 }
 
 /**
@@ -79,6 +83,18 @@ export function fechaHoyChile(): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: CHILE_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date())
+}
+
+/**
+ * Día calendario chileno al que pertenece un instante, como `YYYY-MM-DD`.
+ * Usarlo (y no `toISOString()`) al desnormalizar fechas para reportes: un turno
+ * abierto a las 22:00 en Chile cae en el día UTC siguiente y quedaría contado en
+ * el día equivocado.
+ */
+export function diaChileDe(instante: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: CHILE_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(instante)
 }
 
 /** Fecha chilena `n` días antes de hoy, como `YYYY-MM-DD`. */

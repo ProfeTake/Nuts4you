@@ -8,7 +8,8 @@ export const crearUsuarioSchema = z.object({
   password:   z.string().min(8, 'Mínimo 8 caracteres').max(128, 'Máximo 128 caracteres'),
   rol:        z.enum(['ADMIN', 'SUPERVISOR', 'BODEGUERO', 'VENDEDOR']),
   pdvId:      z.number().int().positive().optional().nullable(),
-  pagoDiario: z.number().int().min(0).default(28000),
+  // Override opcional: null/ausente = usar ConfigNomina.pago_diario_base.
+  pagoDiario: z.number().int().min(0).max(1_000_000).nullable().optional(),
 })
 
 export const editarUsuarioSchema = z.object({
@@ -18,7 +19,7 @@ export const editarUsuarioSchema = z.object({
   password:   z.string().min(8, 'Mínimo 8 caracteres').max(128, 'Máximo 128 caracteres').optional(),
   rol:        z.enum(['ADMIN', 'SUPERVISOR', 'BODEGUERO', 'VENDEDOR']).optional(),
   pdvId:      z.number().int().positive().nullable().optional(),
-  pagoDiario: z.number().int().min(0).optional(),
+  pagoDiario: z.number().int().min(0).max(1_000_000).nullable().optional(),
 })
 
 export const estadoUsuarioSchema = z.object({

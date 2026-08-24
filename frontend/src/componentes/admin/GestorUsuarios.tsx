@@ -43,6 +43,7 @@ interface Usuario {
   pdvId:       number | null;
   pdvNombre:   string | null;
   activo:      boolean;
+  esDemo:      boolean;
   pagoDiario:  number;
   ultimoTurno: string | null;
 }
@@ -62,8 +63,19 @@ const FORM_VACIO: FormUsuario = {
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Mismo patrón que el backend (crearUsuarioSchema): 12345678-9 o 1.234.567-8
+const RUT_RE = /^\d{1,2}\.?\d{3}\.?\d{3}-[\dkK]$/;
+const PASSWORD_MIN = 8;
 
 const ROLES: Rol[] = ["ADMIN", "SUPERVISOR", "BODEGUERO", "VENDEDOR"];
+
+// Etiqueta visible del filtro de estado. Base UI muestra el value crudo en el
+// trigger si no se le pasa la etiqueta como children de <SelectValue>.
+const ETIQUETA_ACTIVO: Record<"todos" | "activos" | "inactivos", string> = {
+  todos:     "Todos",
+  activos:   "Activos",
+  inactivos: "Inactivos",
+};
 
 const ROL_BADGE: Record<Rol, string> = {
   ADMIN:      "bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-950/40 dark:text-violet-400",
@@ -97,10 +109,49 @@ function ModalUsuario({ usuario, pdvs, onCerrar, onGuardar, guardando }: ModalUs
       : FORM_VACIO
   );
 
-  const set = (k: keyof FormUsuario) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  // Errores de validación por campo (se limpian al escribir en ese campo).
+  const [errores, setErrores] = useState<Partial<Record<keyof FormUsuario, string>>>({});
+
+  const set = (k: keyof FormUsuario) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm((p) => ({ ...p, [k]: e.target.value }));
+    setErrores((prev) => (prev[k] ? { ...prev, [k]: undefined } : prev));
+  };
 
   const esNuevo = !usuario;
+
+  // Valida el formulario antes de enviarlo. Devuelve true si es válido.
+  // Espeja las reglas del backend (crearUsuarioSchema) para dar feedback
+  // inmediato y específico en vez del genérico "Datos inválidos" del servidor.
+  const validar = (): boolean => {
+    const errs: Partial<Record<keyof FormUsuario, string>> = {};
+
+    if (form.nombre.trim().length < 2) {
+      errs.nombre = "Ingresa el nombre completo (mínimo 2 caracteres).";
+    }
+    if (!RUT_RE.test(form.rut.trim())) {
+      errs.rut = "RUT inválido. Formato: 12345678-9.";
+    }
+    const email = form.email.trim();
+    if (esNuevo && !email) {
+      errs.email = "El correo es obligatorio para enviar las credenciales.";
+    } else if (email && !EMAIL_RE.test(email)) {
+      errs.email = "Correo electrónico inválido.";
+    }
+    // Contraseña: obligatoria al crear; al editar solo se valida si se escribió.
+    if (esNuevo || form.password) {
+      if (form.password.length < PASSWORD_MIN) {
+        errs.password = `La contraseña debe tener al menos ${PASSWORD_MIN} caracteres.`;
+      }
+    }
+
+    setErrores(errs);
+    return Object.keys(errs).length === 0;
+  };
+
+  const handleSubmit = () => {
+    if (!validar()) return;
+    onGuardar(form);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
@@ -128,15 +179,29 @@ function ModalUsuario({ usuario, pdvs, onCerrar, onGuardar, guardando }: ModalUs
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Nombre completo</label>
-              <Input placeholder="Nombre Apellido" value={form.nombre} onChange={set("nombre")} />
+              <Input
+                placeholder="Nombre Apellido"
+                value={form.nombre}
+                onChange={set("nombre")}
+                aria-invalid={!!errores.nombre}
+                className={errores.nombre ? "border-destructive focus-visible:ring-destructive/30" : undefined}
+              />
+              {errores.nombre && <p className="text-xs text-destructive">{errores.nombre}</p>}
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">RUT</label>
               <Input
                 placeholder="12345678-9"
                 value={form.rut}
-                onChange={(e) => setForm((p) => ({ ...p, rut: autoFormatRUT(e.target.value) }))}
+                onChange={(e) => {
+                  const rut = autoFormatRUT(e.target.value);
+                  setForm((p) => ({ ...p, rut }));
+                  setErrores((prev) => (prev.rut ? { ...prev, rut: undefined } : prev));
+                }}
+                aria-invalid={!!errores.rut}
+                className={errores.rut ? "border-destructive focus-visible:ring-destructive/30" : undefined}
               />
+              {errores.rut && <p className="text-xs text-destructive">{errores.rut}</p>}
             </div>
           </div>
 
@@ -149,12 +214,18 @@ function ModalUsuario({ usuario, pdvs, onCerrar, onGuardar, guardando }: ModalUs
               placeholder="usuario@correo.com"
               value={form.email}
               onChange={set("email")}
+              aria-invalid={!!errores.email}
+              className={errores.email ? "border-destructive focus-visible:ring-destructive/30" : undefined}
             />
-            <p className="text-xs text-muted-foreground">
-              {esNuevo
-                ? "Obligatorio. Se enviarán las credenciales de acceso a este correo."
-                : "Si lo cambias, las próximas notificaciones llegarán al nuevo correo."}
-            </p>
+            {errores.email ? (
+              <p className="text-xs text-destructive">{errores.email}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {esNuevo
+                  ? "Obligatorio. Se enviarán las credenciales de acceso a este correo."
+                  : "Si lo cambias, las próximas notificaciones llegarán al nuevo correo."}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -166,7 +237,14 @@ function ModalUsuario({ usuario, pdvs, onCerrar, onGuardar, guardando }: ModalUs
               placeholder={esNuevo ? "Mínimo 8 caracteres" : "Nueva contraseña…"}
               value={form.password}
               onChange={set("password")}
+              aria-invalid={!!errores.password}
+              className={errores.password ? "border-destructive focus-visible:ring-destructive/30" : undefined}
             />
+            {errores.password ? (
+              <p className="text-xs text-destructive">{errores.password}</p>
+            ) : esNuevo ? (
+              <p className="text-xs text-muted-foreground">Mínimo 8 caracteres.</p>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -217,7 +295,7 @@ function ModalUsuario({ usuario, pdvs, onCerrar, onGuardar, guardando }: ModalUs
             className="flex-1 h-10 rounded-xl border text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
             Cancelar
           </button>
-          <Button className="flex-1" disabled={guardando} onClick={() => onGuardar(form)}>
+          <Button className="flex-1" disabled={guardando} onClick={handleSubmit}>
             {guardando ? <Loader2 className="size-4 animate-spin mr-1" /> : null}
             {esNuevo ? "Crear usuario" : "Guardar cambios"}
           </Button>
@@ -377,7 +455,9 @@ export function GestorUsuarios() {
         </div>
         <Select value={filtroRol} onValueChange={(v) => setFiltroRol(v as Rol | "")}>
           <SelectTrigger className="w-40 h-9">
-            <SelectValue placeholder="Todos los roles" />
+            <SelectValue placeholder="Todos los roles">
+              {filtroRol === "" ? "Todos los roles" : filtroRol}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="">Todos los roles</SelectItem>
@@ -386,7 +466,7 @@ export function GestorUsuarios() {
         </Select>
         <Select value={filtroActivo} onValueChange={(v) => setFiltroActivo(v as typeof filtroActivo)}>
           <SelectTrigger className="w-36 h-9">
-            <SelectValue />
+            <SelectValue>{ETIQUETA_ACTIVO[filtroActivo]}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="todos">Todos</SelectItem>
@@ -426,7 +506,14 @@ export function GestorUsuarios() {
                 {usuariosFiltrados.map((u) => (
                   <tr key={u.id} className="border-t hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3">
-                      <p className="font-semibold text-foreground">{u.nombre}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-semibold text-foreground">{u.nombre}</p>
+                        {u.esDemo && (
+                          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
+                            DEMO
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-muted-foreground tabular-nums">{u.rut}</p>
                     </td>
                     <td className="px-4 py-3">

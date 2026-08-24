@@ -40,10 +40,6 @@ router.post('/', async (req, res, next) => {
     const data = await crearUsuario(parsed.data)
     res.status(201).json({ data })
   } catch (error) {
-    if (error instanceof Error) {
-      res.status(409).json({ error: error.message })
-      return
-    }
     next(error)
   }
 })
@@ -92,7 +88,6 @@ router.delete('/:id', async (req, res, next) => {
     const data = await eliminarUsuario(id, req.usuario!.id)
     res.json({ data })
   } catch (error) {
-    if (error instanceof Error) { res.status(400).json({ error: error.message }); return }
     next(error)
   }
 })

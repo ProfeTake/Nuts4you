@@ -59,7 +59,8 @@ import { apiGet, apiPost, apiPatch } from "@/lib/api";
 import { autoFormatRUT } from "@/lib/rut";
 import { HorariosTurnos }        from "./HorariosVendedoras";
 import { SeguimientoVendedores } from "./SeguimientoVendedores";
-import { ConfigBonos }           from "./ConfigBonos";
+import { ConfigSueldos }         from "./ConfigSueldos";
+import { PagosPeriodo }          from "./PagosPeriodo";
 
 // ─── Tipos desde API ────────────────────────────────────────────────────────
 
@@ -87,6 +88,14 @@ interface TurnoRRHH {
   horaCierre:    string | null;
 }
 
+// Etiqueta visible del filtro de estado del personal. Base UI muestra el value
+// crudo en el trigger si no se le pasa la etiqueta como children de <SelectValue>.
+const ETIQUETA_ESTADO_PERSONAL: Record<"todos" | "activos" | "inactivos", string> = {
+  todos:     "Todos",
+  activos:   "Activos",
+  inactivos: "Inactivos",
+};
+
 interface LiquidacionAPI {
   usuarioId:           number;
   nombre:              string;
@@ -94,6 +103,8 @@ interface LiquidacionAPI {
   promedioVentaDiaria: number;
   pagoBase:            number;
   bonos:               number;
+  /** Σ de las horas extra de los turnos del mes (planilla, columna E × 3.000). */
+  extras:              number;
   descuentosCaja:      number;
   sueldoLiquido:       number;
 }
@@ -175,9 +186,18 @@ export function ModuloRRHH() {
 
   const mutCrear = useMutation({
     mutationFn: (payload: object) =>
-      apiPost<{ data: Personal }>("/rrhh/personal", payload),
+      apiPost<{ data: Personal & { passwordInicial?: string | null } }>("/rrhh/personal", payload),
     onSuccess: (res) => {
-      toast.success("Personal agregado", { description: res.data.nombre });
+      // La contraseña generada por el backend se muestra UNA sola vez;
+      // no vuelve a estar disponible (en BD solo queda el hash).
+      if (res.data.passwordInicial) {
+        toast.success("Personal agregado", {
+          description: `${res.data.nombre} — contraseña inicial: ${res.data.passwordInicial}. Anótala: no se volverá a mostrar.`,
+          duration: 20000,
+        });
+      } else {
+        toast.success("Personal agregado", { description: res.data.nombre });
+      }
       queryClient.invalidateQueries({ queryKey: ["rrhh", "personal"] });
       setPanel(null);
     },
@@ -332,9 +352,9 @@ export function ModuloRRHH() {
               <Calendar className="size-4" />
               Turnos
             </TabsTrigger>
-            <TabsTrigger value="liquidaciones" className="shrink-0 !h-10 px-4 gap-2 min-w-max text-sm">
+            <TabsTrigger value="sueldos" className="shrink-0 !h-10 px-4 gap-2 min-w-max text-sm">
               <Banknote className="size-4" />
-              Pagos
+              Sueldos
             </TabsTrigger>
             <TabsTrigger value="horarios" className="shrink-0 !h-10 px-4 gap-2 min-w-max text-sm">
               <Calendar className="size-4" />
@@ -343,10 +363,6 @@ export function ModuloRRHH() {
             <TabsTrigger value="seguimiento" className="shrink-0 !h-10 px-4 gap-2 min-w-max text-sm">
               <Star className="size-4" />
               Seguimiento
-            </TabsTrigger>
-            <TabsTrigger value="bonos" className="shrink-0 !h-10 px-4 gap-2 min-w-max text-sm">
-              <Gift className="size-4" />
-              Bonos
             </TabsTrigger>
           </TabsList>
         </div>
@@ -370,7 +386,9 @@ export function ModuloRRHH() {
                 onValueChange={(v) => setFiltroEstado(v as typeof filtroEstado)}
               >
                 <SelectTrigger className="h-9 w-36">
-                  <SelectValue />
+                  {/* La etiqueta va como children: Base UI muestra el value crudo
+                      si no se le pasa (decía "todos" en minúscula). */}
+                  <SelectValue>{ETIQUETA_ESTADO_PERSONAL[filtroEstado]}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="todos">Todos</SelectItem>
@@ -580,8 +598,54 @@ export function ModuloRRHH() {
           )}
         </TabsContent>
 
-        {/* ════════════ TAB: LIQUIDACIONES ════════════ */}
-        <TabsContent value="liquidaciones" className="mt-5 space-y-5">
+        {/* ════════════ TAB: SUELDOS ════════════ */}
+        {/* Fusión de los antiguos tabs "Pagos" y "Bonos": liquidar y configurar
+            viven juntos porque son el mismo cálculo (planilla "Sueldos Feb 2026"). */}
+        <TabsContent value="sueldos" className="mt-5 space-y-5">
+          <Tabs defaultValue="liquidar">
+            <TabsList className="!h-10">
+              <TabsTrigger value="liquidar" className="!h-8 px-4 gap-2 text-sm">
+                <Banknote className="size-4" />
+                Liquidar período
+              </TabsTrigger>
+              <TabsTrigger value="configuracion" className="!h-8 px-4 gap-2 text-sm">
+                <Gift className="size-4" />
+                Configuración
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="configuracion" className="mt-4">
+              <ConfigSueldos />
+            </TabsContent>
+
+            {/* Liquidación real (C3/A39, D6): marca los turnos como pagados.
+                La nómina informativa del mes vive en la pestaña Seguimiento. */}
+            <TabsContent value="liquidar" className="mt-4">
+              <PagosPeriodo />
+            </TabsContent>
+          </Tabs>
+        </TabsContent>
+
+        {/* ════════════ TAB: HORARIOS ════════════ */}
+        <TabsContent value="horarios" className="mt-5">
+          <HorariosTurnos />
+        </TabsContent>
+
+        {/* ════════════ TAB: SEGUIMIENTO ════════════ */}
+        <TabsContent value="seguimiento" className="mt-5">
+          <SeguimientoVendedores />
+
+          {/* Nómina informativa del mes: vive acá y NO en Sueldos porque mide
+              otra cosa que la liquidación (incluye turnos sin recepción
+              confirmada y ya pagados). Tenerlas juntas hacía que dos totales
+              distintos compitieran en la misma pantalla. */}
+          <div>
+            <h3 className="text-sm font-bold">Nómina informativa de {formatearMesLabel(mesSeleccionado)}</h3>
+            <p className="text-xs text-muted-foreground">
+              Referencia del mes completo (todos los turnos cerrados, pagados o no). Los pagos reales se generan arriba.
+            </p>
+          </div>
+
           {cargandoLiq ? (
             <div className="flex items-center justify-center py-16 gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
@@ -701,6 +765,11 @@ export function ModuloRRHH() {
                             + bono {formatearCLP(l.bonos)}
                           </span>
                         )}
+                        {l.extras > 0 && (
+                          <span className="ml-2 text-emerald-600 font-medium">
+                            + adic. {formatearCLP(l.extras)}
+                          </span>
+                        )}
                       </span>
                       <ChevronRight className="size-4 text-muted-foreground" />
                     </div>
@@ -719,6 +788,7 @@ export function ModuloRRHH() {
                         <th className="px-4 py-3 font-medium text-right">Prom. Venta</th>
                         <th className="px-4 py-3 font-medium text-right">Pago Base</th>
                         <th className="px-4 py-3 font-medium text-right">Bonos</th>
+                        <th className="px-4 py-3 font-medium text-right">Horas extra</th>
                         <th className="px-4 py-3 font-medium text-right">Desc. Caja</th>
                         <th className="px-4 py-3 font-medium text-right">Líquido</th>
                         <th className="px-4 py-3 font-medium text-center">Detalle</th>
@@ -742,6 +812,9 @@ export function ModuloRRHH() {
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums text-emerald-600 font-medium">
                             {l.bonos > 0 ? `+${formatearCLP(l.bonos)}` : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums text-emerald-600 font-medium">
+                            {l.extras > 0 ? `+${formatearCLP(l.extras)}` : "—"}
                           </td>
                           <td className={`px-4 py-3 text-right tabular-nums font-bold ${
                             l.descuentosCaja > 0 ? "text-red-600" : "text-muted-foreground"
@@ -783,21 +856,6 @@ export function ModuloRRHH() {
             </>
           )}
         </TabsContent>
-
-        {/* ════════════ TAB: HORARIOS ════════════ */}
-        <TabsContent value="horarios" className="mt-5">
-          <HorariosTurnos />
-        </TabsContent>
-
-        {/* ════════════ TAB: SEGUIMIENTO ════════════ */}
-        <TabsContent value="seguimiento" className="mt-5">
-          <SeguimientoVendedores />
-        </TabsContent>
-
-        {/* ════════════ TAB: BONOS ════════════ */}
-        <TabsContent value="bonos" className="mt-5">
-          <ConfigBonos />
-        </TabsContent>
       </Tabs>
 
       {/* ════════════════════════════════════════════════════════════════════
@@ -815,7 +873,7 @@ export function ModuloRRHH() {
             <p className="text-sm text-muted-foreground">
               {panel.tipo === "editar-personal"
                 ? "Modifica los datos del vendedor/a."
-                : "Registra un nuevo vendedor/a. La contraseña inicial será 1234."}
+                : "Registra un nuevo vendedor/a. Se generará una contraseña inicial aleatoria."}
             </p>
           </div>
 
@@ -891,8 +949,9 @@ export function ModuloRRHH() {
               <div className="flex items-start gap-2 rounded-lg bg-blue-50 dark:bg-blue-950/30 px-3 py-2.5 text-xs text-blue-700 dark:text-blue-400">
                 <CheckCircle2 className="size-3.5 mt-0.5 shrink-0" />
                 <span>
-                  La contraseña inicial será <strong>1234</strong>. Cámbiala desde{" "}
-                  <strong>Gestión de Usuarios</strong> antes de entregar las credenciales.
+                  Al guardar se mostrará <strong>una única vez</strong> la contraseña inicial
+                  generada. Entrégala al vendedor/a; puedes cambiarla después desde{" "}
+                  <strong>Gestión de Usuarios</strong>.
                 </span>
               </div>
             )}
@@ -987,6 +1046,11 @@ export function ModuloRRHH() {
                 label="Bonos"
                 valor={panel.liq.bonos > 0 ? `+ ${formatearCLP(panel.liq.bonos)}` : "—"}
                 claseValor={panel.liq.bonos > 0 ? "text-emerald-600 font-semibold" : "text-muted-foreground"}
+              />
+              <FilaDetalle
+                label="Horas extra"
+                valor={panel.liq.extras > 0 ? `+ ${formatearCLP(panel.liq.extras)}` : "—"}
+                claseValor={panel.liq.extras > 0 ? "text-emerald-600 font-semibold" : "text-muted-foreground"}
               />
               <FilaDetalle
                 label="Descuento por diferencia de caja"

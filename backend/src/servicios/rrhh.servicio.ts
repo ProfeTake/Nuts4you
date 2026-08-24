@@ -1,7 +1,13 @@
 import bcrypt from 'bcryptjs'
+import { randomInt } from 'crypto'
 import prisma from '../config/prisma'
+import { ErrorApp, conflicto, noEncontrado } from '../lib/errores'
+import { rangoMesChile } from '../lib/tiempoChile'
 import { calcularBono } from './calculos.servicio'
 import { getTramosBonoActivosPorPdv, tramosParaPdv } from './configBono.servicio'
+import {
+  calcularDescuentoCaja, calcularMontoExtra, calcularTotalPago, getConfigSueldos, pagoDiarioDe,
+} from './configNomina.servicio'
 import { enviarCorreoHorario } from './correo.servicio'
 import { usuarioIncludeBasico } from './shared/usuario.query'
 import type {
@@ -13,16 +19,20 @@ import type {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+/**
+ * @param pagoDiarioBase - ConfigSueldos.pagoDiarioBase, para resolver el pago
+ *   efectivo de quienes no tienen override (`pago_diario` null).
+ */
 function formatearPersonal(u: {
   id: number
   rut: string
   nombre: string
   email: string | null
   activo: boolean
-  pago_diario: number
+  pago_diario: number | null
   pdv: { id: number; nombre: string } | null
   turnos: { id: number; fecha_apertura: Date }[]
-}) {
+}, pagoDiarioBase: number) {
   return {
     id:          u.id,
     nombre:      u.nombre,
@@ -30,7 +40,10 @@ function formatearPersonal(u: {
     email:       u.email,
     pdvId:       u.pdv?.id ?? null,
     pdvNombre:   u.pdv?.nombre ?? null,
-    pagoDiario:  u.pago_diario,
+    // Lo que realmente se le paga por turno...
+    pagoDiario:  pagoDiarioDe(u.pago_diario, pagoDiarioBase),
+    // ...y si viene de un trato particular o del valor global (null = global).
+    pagoDiarioOverride: u.pago_diario,
     activo:      u.activo,
     ultimoTurno: u.turnos[0]?.fecha_apertura.toISOString() ?? null,
   }
@@ -42,26 +55,42 @@ export async function getPersonal() {
   const rol = await prisma.rol.findUnique({ where: { nombre: 'VENDEDOR' } })
   if (!rol) return []
 
-  const usuarios = await prisma.usuario.findMany({
-    where: { rol_id: rol.id },
-    include: usuarioIncludeBasico,
-    orderBy: { nombre: 'asc' },
-  })
+  const [usuarios, config] = await Promise.all([
+    prisma.usuario.findMany({
+      where: { rol_id: rol.id },
+      include: usuarioIncludeBasico,
+      orderBy: { nombre: 'asc' },
+    }),
+    getConfigSueldos(),
+  ])
 
-  return usuarios.map(formatearPersonal)
+  return usuarios.map((u) => formatearPersonal(u, config.pagoDiarioBase))
 }
 
 const limpiarRut = (rut: string) => rut.replace(/\./g, '').trim()
 
+// Alfabeto sin caracteres confundibles (0/O, 1/l/i) para dictar la clave por teléfono.
+const ALFABETO_PASSWORD = 'abcdefghjkmnpqrstuvwxyz23456789'
+
+function generarPasswordInicial(largo = 8): string {
+  let clave = ''
+  for (let i = 0; i < largo; i++) clave += ALFABETO_PASSWORD[randomInt(ALFABETO_PASSWORD.length)]
+  return clave
+}
+
 export async function crearPersonal(data: CrearPersonalInput) {
   const rut = limpiarRut(data.rut)
   const existente = await prisma.usuario.findUnique({ where: { rut } })
-  if (existente) throw new Error(`Ya existe un usuario con el RUT ${rut}`)
+  if (existente) throw conflicto(`Ya existe un usuario con el RUT ${rut}`)
 
   const rol = await prisma.rol.findUnique({ where: { nombre: 'VENDEDOR' } })
   if (!rol) throw new Error('Rol VENDEDOR no encontrado')
 
-  const hash = await bcrypt.hash('1234', 10)
+  // Contraseña inicial: la indicada por el admin o una aleatoria de un solo uso.
+  // Se devuelve en claro una única vez para que el admin la entregue; en BD
+  // solo queda el hash.
+  const passwordGenerada = data.password ? null : generarPasswordInicial()
+  const hash = await bcrypt.hash(data.password ?? passwordGenerada!, 10)
 
   const usuario = await prisma.usuario.create({
     data: {
@@ -71,41 +100,45 @@ export async function crearPersonal(data: CrearPersonalInput) {
       password_hash: hash,
       rol_id:        rol.id,
       pdv_id:        data.pdvId ?? null,
-      pago_diario:   data.pagoDiario,
+      // null = sin trato particular: hereda ConfigNomina.pago_diario_base.
+      pago_diario:   data.pagoDiario ?? null,
     },
     include: usuarioIncludeBasico,
   })
 
-  return formatearPersonal(usuario)
+  const { pagoDiarioBase } = await getConfigSueldos()
+  return { ...formatearPersonal(usuario, pagoDiarioBase), passwordInicial: passwordGenerada }
 }
 
 export async function editarPersonal(id: number, data: EditarPersonalInput) {
   const updateData: Record<string, unknown> = {}
   if (data.nombre !== undefined)     updateData.nombre      = data.nombre
   if (data.pdvId !== undefined)      updateData.pdv_id      = data.pdvId
+  // null explícito = quitar el override y volver al pago diario global.
   if (data.pagoDiario !== undefined) updateData.pago_diario = data.pagoDiario
   if (data.activo !== undefined)     updateData.activo      = data.activo
   if (data.email !== undefined)      updateData.email       = data.email ?? null
 
-  const usuario = await prisma.usuario.update({
-    where: { id },
-    data:  updateData,
-    include: usuarioIncludeBasico,
-  })
+  const [usuario, config] = await Promise.all([
+    prisma.usuario.update({
+      where: { id },
+      data:  updateData,
+      include: usuarioIncludeBasico,
+    }),
+    getConfigSueldos(),
+  ])
 
-  return formatearPersonal(usuario)
+  return formatearPersonal(usuario, config.pagoDiarioBase)
 }
 
 // ─── Turnos RRHH (historial real de TurnoCaja) ──────────────────────────────
 
 export async function getTurnosRRHH(mes: string) {
-  const inicio = new Date(`${mes}-01T00:00:00-04:00`)
-  const fin    = new Date(inicio)
-  fin.setMonth(fin.getMonth() + 1)
+  const { inicio, fin } = rangoMesChile(mes)
 
   const turnos = await prisma.turnoCaja.findMany({
     where: {
-      fecha_apertura: { gte: inicio, lt: fin },
+      fecha_apertura: { gte: inicio, lte: fin },
     },
     include: {
       usuario: { select: { id: true, nombre: true } },
@@ -129,6 +162,23 @@ export async function getTurnosRRHH(mes: string) {
 
 // ─── Horarios planeados ──────────────────────────────────────────────────────
 
+/**
+ * Rango [inicio, fin) del mes en UTC. Las fechas de TurnoPlaneado se guardan como
+ * medianoche UTC del día (columna @db.Date, ej. `new Date("2026-07-31")`), así que
+ * el rango del mes debe calcularse en UTC. Antes se usaba `fin.setMonth(+1)`, que
+ * opera en la zona LOCAL del servidor: en Chile (UTC-4), el 1 del mes 00:00 UTC es
+ * el día anterior 20:00 local, y setMonth producía el día 31 en vez del 1 del mes
+ * siguiente → el filtro `fecha < fin` EXCLUÍA el último día del mes (turnos
+ * asignados el último día no aparecían/publicaban/limpiaban).
+ */
+function rangoMesUTC(mes: string): { inicio: Date; fin: Date } {
+  const [anio, mesNum] = mes.split('-').map(Number)
+  return {
+    inicio: new Date(Date.UTC(anio, mesNum - 1, 1)),
+    fin:    new Date(Date.UTC(anio, mesNum, 1)),
+  }
+}
+
 export async function importarHorarios(data: ImportarHorariosInput) {
   let procesados = 0
   for (const item of data.items) {
@@ -144,9 +194,7 @@ export async function importarHorarios(data: ImportarHorariosInput) {
 }
 
 export async function getHorarios(mes: string) {
-  const inicio = new Date(`${mes}-01`)
-  const fin    = new Date(inicio)
-  fin.setMonth(fin.getMonth() + 1)
+  const { inicio, fin } = rangoMesUTC(mes)
 
   const [planeados, reales, pdvs] = await Promise.all([
     prisma.turnoPlaneado.findMany({
@@ -277,9 +325,7 @@ function generarMensajeHorario(
 }
 
 export async function publicarHorarios(mes: string) {
-  const inicio = new Date(`${mes}-01`)
-  const fin    = new Date(inicio)
-  fin.setMonth(fin.getMonth() + 1)
+  const { inicio, fin } = rangoMesUTC(mes)
 
   const turnos = await prisma.turnoPlaneado.findMany({
     where:   { fecha: { gte: inicio, lt: fin } },
@@ -290,7 +336,7 @@ export async function publicarHorarios(mes: string) {
     orderBy: [{ usuario_id: 'asc' }, { fecha: 'asc' }],
   })
 
-  if (turnos.length === 0) throw new Error('No hay turnos planeados para este mes')
+  if (turnos.length === 0) throw new ErrorApp('No hay turnos planeados para este mes')
 
   // Agrupar por vendedor
   const porVendedor = new Map<number, { nombre: string; email: string | null; turnos: { fecha: Date; pdvNombre: string }[] }>()
@@ -330,9 +376,7 @@ export async function publicarHorarios(mes: string) {
 }
 
 export async function limpiarHorariosMes(mes: string) {
-  const inicio = new Date(`${mes}-01`)
-  const fin    = new Date(inicio)
-  fin.setMonth(fin.getMonth() + 1)
+  const { inicio, fin } = rangoMesUTC(mes)
   const { count } = await prisma.turnoPlaneado.deleteMany({
     where: { fecha: { gte: inicio, lt: fin } },
   })
@@ -342,21 +386,22 @@ export async function limpiarHorariosMes(mes: string) {
 // ─── Seguimiento de vendedoras ────────────────────────────────────────────────
 
 export async function getSeguimientoVendedores(mes: string) {
-  const inicio = new Date(`${mes}-01T00:00:00-04:00`)
-  const fin    = new Date(inicio)
-  fin.setMonth(fin.getMonth() + 1)
+  const { inicio, fin } = rangoMesChile(mes)
 
   const rolVendedor = await prisma.rol.findUnique({ where: { nombre: 'VENDEDOR' } })
   if (!rolVendedor) return []
 
-  const vendedores = await prisma.usuario.findMany({
-    where:   { rol_id: rolVendedor.id },
-    orderBy: { nombre: 'asc' },
-  })
+  const [vendedores, { pagoDiarioBase }] = await Promise.all([
+    prisma.usuario.findMany({
+      where:   { rol_id: rolVendedor.id },
+      orderBy: { nombre: 'asc' },
+    }),
+    getConfigSueldos(),
+  ])
 
   const turnos = await prisma.turnoCaja.findMany({
     where: {
-      fecha_apertura: { gte: inicio, lt: fin },
+      fecha_apertura: { gte: inicio, lte: fin },
       usuario: { rol_id: rolVendedor.id },
     },
     include: {
@@ -388,7 +433,7 @@ export async function getSeguimientoVendedores(mes: string) {
       id:              v.id,
       nombre:          v.nombre,
       rut:             v.rut,
-      pagoDiario:      v.pago_diario,
+      pagoDiario:      pagoDiarioDe(v.pago_diario, pagoDiarioBase),
       activo:          v.activo,
       totalTurnos:     tv.length,
       turnosCerrados:  tv.filter((t) => t.estado === 'CERRADO').length,
@@ -413,18 +458,21 @@ export async function getSeguimientoVendedores(mes: string) {
 // ─── Nómina mensual con bonos escalonados por sucursal ──────────────────────
 // Calcula el bono individualmente por turno (no por mes) porque el bono
 // depende de la venta diaria y del PDV donde trabajó ese día.
-// Los umbrales de bono están en calculos.servicio.ts → TABLA_BONOS.
+// Los umbrales de bono viven en la tabla ConfigBono (editables en Personal →
+// Sueldos → Configuración); TABLA_BONOS es solo el fallback por nombre de PDV.
+//
+// Es informativa: cubre TODOS los turnos cerrados del mes, estén pagados o no y
+// tengan o no la recepción confirmada, a diferencia de getResumenPago(). Por eso
+// no incluye "adicional" ni "cotizaciones", que se cargan al liquidar.
 
 export async function getNomina(mes: string) {
-  const inicio = new Date(`${mes}-01T00:00:00-04:00`)
-  const fin    = new Date(inicio)
-  fin.setMonth(fin.getMonth() + 1)
+  const { inicio, fin } = rangoMesChile(mes)
 
   // Traer todos los turnos cerrados del mes para vendedores
   const turnos = await prisma.turnoCaja.findMany({
     where: {
       estado:         'CERRADO',
-      fecha_apertura: { gte: inicio, lt: fin },
+      fecha_apertura: { gte: inicio, lte: fin },
       usuario: { rol: { nombre: 'VENDEDOR' } },
     },
     include: {
@@ -433,17 +481,23 @@ export async function getNomina(mes: string) {
     },
   })
 
-  // Tramos de bono desde BD (con fallback a TABLA_BONOS por nombre).
-  const tramosPorPdv = await getTramosBonoActivosPorPdv()
+  // Tramos de bono desde BD (con fallback a TABLA_BONOS por nombre) y config de
+  // sueldos: el descuento se resuelve sobre el neto del mes, no turno a turno
+  // (misma regla que aplica generarPagos; ver configNomina.servicio).
+  const [tramosPorPdv, config] = await Promise.all([
+    getTramosBonoActivosPorPdv(),
+    getConfigSueldos(),
+  ])
 
-  // Agregar por usuario calculando bono turno a turno
+  // Agregar por usuario calculando bono y extra turno a turno
   const porUsuario = new Map<number, {
-    nombre:         string
-    pagoDiario:     number
-    dias:           number
-    ventaTotal:     number
-    bonos:          number
-    descuentosCaja: number
+    nombre:      string
+    pagoDiario:  number
+    dias:        number
+    ventaTotal:  number
+    bonos:       number
+    extras:      number
+    diferencias: number[]
   }>()
 
   for (const turno of turnos) {
@@ -451,32 +505,34 @@ export async function getNomina(mes: string) {
     const ventaTurno  = turno.total_calculado ?? 0
     const tramos      = tramosParaPdv(tramosPorPdv, turno.pdv.id, turno.pdv.nombre)
     const bonoTurno   = calcularBono(tramos, ventaTurno)
-    const descuento   = turno.diferencia_caja !== null && turno.diferencia_caja < 0
-      ? Math.abs(turno.diferencia_caja)
-      : 0
+    const extraTurno  = calcularMontoExtra(turno.extra_decimas, config.valorExtra)
 
     if (!porUsuario.has(uid)) {
       porUsuario.set(uid, {
-        nombre:         turno.usuario?.nombre ?? 'Usuario eliminado',
-        pagoDiario:     turno.usuario?.pago_diario ?? 0,
-        dias:           0,
-        ventaTotal:     0,
-        bonos:          0,
-        descuentosCaja: 0,
+        nombre:      turno.usuario?.nombre ?? 'Usuario eliminado',
+        pagoDiario:  pagoDiarioDe(turno.usuario?.pago_diario, config.pagoDiarioBase),
+        dias:        0,
+        ventaTotal:  0,
+        bonos:       0,
+        extras:      0,
+        diferencias: [],
       })
     }
 
     const entrada = porUsuario.get(uid)!
     entrada.dias++
-    entrada.ventaTotal     += ventaTurno
-    entrada.bonos          += bonoTurno
-    entrada.descuentosCaja += descuento
+    entrada.ventaTotal += ventaTurno
+    entrada.bonos      += bonoTurno
+    entrada.extras     += extraTurno
+    // Con signo: los sobrantes compensan los faltantes al cerrar el mes.
+    entrada.diferencias.push(turno.diferencia_caja ?? 0)
   }
 
   return Array.from(porUsuario.entries())
     .sort(([, a], [, b]) => a.nombre.localeCompare(b.nombre, 'es'))
     .map(([usuarioId, data]) => {
-      const pagoBase = data.dias * data.pagoDiario
+      const pagoBase       = data.dias * data.pagoDiario
+      const descuentosCaja = calcularDescuentoCaja(data.diferencias, config.toleranciaFaltante)
       return {
         usuarioId,
         nombre:              data.nombre,
@@ -484,8 +540,58 @@ export async function getNomina(mes: string) {
         promedioVentaDiaria: data.dias > 0 ? Math.round(data.ventaTotal / data.dias) : 0,
         pagoBase,
         bonos:               data.bonos,
-        descuentosCaja:      data.descuentosCaja,
-        sueldoLiquido:       pagoBase + data.bonos - data.descuentosCaja,
+        extras:              data.extras,
+        descuentosCaja,
+        netoCaja:            data.diferencias.reduce((s, d) => s + d, 0),
+        sueldoLiquido:       calcularTotalPago({
+          montoBase:       pagoBase,
+          montoBonos:      data.bonos,
+          montoExtras:     data.extras,
+          montoDescuentos: descuentosCaja,
+        }),
       }
     })
+}
+
+// ─── "Adicional"/Extra de un turno (planilla, columna E) ─────────────────────
+
+/** Valores permitidos, los mismos de la validación de datos del Excel (V17:V19). */
+const EXTRAS_VALIDOS = [0, 5, 10, 15]
+
+/**
+ * Carga el "Adicional" de un turno ya cerrado. Lo hace el ADMIN al liquidar: el
+ * vendedor no declara su propio extra.
+ *
+ * Se bloquea sobre turnos ya pagados porque `PagoPersonal.monto_extras` es un
+ * snapshot congelado — cambiar el extra después dejaría el pago sin cuadrar con
+ * sus propios turnos.
+ */
+export async function setExtraTurno(turnoId: number, extraDecimas: number) {
+  if (!EXTRAS_VALIDOS.includes(extraDecimas)) {
+    throw new ErrorApp('El adicional debe ser 0, 0,5, 1 o 1,5')
+  }
+
+  const turno = await prisma.turnoCaja.findUnique({
+    where:  { id: turnoId },
+    select: { id: true, estado: true, pago_id: true },
+  })
+  if (!turno) throw noEncontrado('Turno')
+  if (turno.estado !== 'CERRADO') {
+    throw conflicto('Solo se puede cargar el adicional de un turno cerrado')
+  }
+  if (turno.pago_id !== null) {
+    throw conflicto('Este turno ya fue pagado: anula el pago antes de cambiar su adicional')
+  }
+
+  const config = await getConfigSueldos()
+  await prisma.turnoCaja.update({
+    where: { id: turnoId },
+    data:  { extra_decimas: extraDecimas },
+  })
+
+  return {
+    turnoId,
+    extraDecimas,
+    montoExtra: calcularMontoExtra(extraDecimas, config.valorExtra),
+  }
 }

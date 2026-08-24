@@ -7,6 +7,8 @@
     "dev": "nodemon --watch src --ext ts --exec ts-node src/servidor.ts",
     "build": "tsc",
     "start": "node dist/servidor.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prisma:generate": "npx prisma generate",
     "prisma:migrate": "npx prisma migrate dev",
     "prisma:studio": "npx prisma studio",
@@ -41,7 +43,8 @@
     "@types/node": "^25.5.0",
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   },
   "allowScripts": {
     "@prisma/client@6.19.2": true,

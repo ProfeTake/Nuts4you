@@ -14,24 +14,28 @@ model Rol {
 }
 
 model Usuario {
-  id            Int         @id @default(autoincrement())
-  rol_id        Int
-  pdv_id        Int?
-  rut           String      @unique
-  nombre        String
-  email         String?     @unique
-  password_hash String
-  activo        Boolean     @default(true)
-  pago_diario   Int         @default(28000)
-  es_demo       Boolean     @default(false) // cuenta de demostración: solo lectura, ver middlewares/autenticar.ts
-  rol           Rol         @relation(fields: [rol_id], references: [id])
-  pdv           PDV?        @relation(fields: [pdv_id], references: [id])
+  id                  Int                @id @default(autoincrement())
+  rol_id              Int
+  pdv_id              Int?
+  rut                 String             @unique
+  nombre              String
+  email               String?            @unique
+  password_hash       String
+  activo              Boolean            @default(true)
+  /// Override del pago por turno de ESTE vendedor. null = usar el valor global
+  /// ConfigNomina.pago_diario_base (planilla, celda P13). Resolver siempre con
+  /// pagoDiarioDe() de configNomina.servicio.ts, nunca leerlo directo.
+  pago_diario         Int?
+  es_demo             Boolean            @default(false) // cuenta de demostración: solo lectura, ver middlewares/autenticar.ts
+  rol                 Rol                @relation(fields: [rol_id], references: [id])
+  pdv                 PDV?               @relation(fields: [pdv_id], references: [id])
   turnos              TurnoCaja[]
   retiros_realizados  RetiroTurno[]
   solicitudes         Solicitud[]
   turnos_planeados    TurnoPlaneado[]
   notificaciones      Notificacion[]
   cierres_preventivos CierrePreventivo[]
+  solicitudes_gasto   SolicitudGasto[]
 }
 
 enum TipoPDV {
@@ -40,37 +44,63 @@ enum TipoPDV {
 }
 
 model PDV {
-  id                  Int             @id @default(autoincrement())
+  id                  Int                @id @default(autoincrement())
   nombre              String
   tipo                TipoPDV
-  activo              Boolean         @default(true)
+  activo              Boolean            @default(true)
   inventario          Inventario[]
   turnos              TurnoCaja[]
   usuarios            Usuario[]
-  movimientos_origen  MovimientoInv[] @relation("PDVOrigen")
-  movimientos_destino MovimientoInv[] @relation("PDVDestino")
+  movimientos_origen  MovimientoInv[]    @relation("PDVOrigen")
+  movimientos_destino MovimientoInv[]    @relation("PDVDestino")
   registros_diarios   RegistroDiario[]
   solicitudes         Solicitud[]
   turnos_planeados    TurnoPlaneado[]
   cierres_preventivos CierrePreventivo[]
   config_bonos        ConfigBono[]
+  preparaciones       PreparacionTurno[]
+  solicitudes_gasto   SolicitudGasto[]
+  despachos_recibidos Despacho[]
 }
 
 /// Tramos de bono por sucursal, editables por el admin (reemplaza la tabla
 /// hardcodeada en calculos.servicio.ts). Cada fila = un umbral de venta diaria
 /// que otorga un monto de bono. Se evalúan de mayor a menor umbral (primer match gana).
 model ConfigBono {
-  id           Int      @id @default(autoincrement())
-  pdv_id       Int
-  umbral_venta Int // venta diaria mínima en CLP para obtener este bono
-  monto_bono   Int // monto del bono en CLP
-  activo       Boolean  @default(true)
-  creado_en    DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  pdv_id         Int
+  umbral_venta   Int // venta diaria mínima en CLP para obtener este bono
+  monto_bono     Int // monto del bono en CLP
+  activo         Boolean  @default(true)
+  creado_en      DateTime @default(now())
   actualizado_en DateTime @updatedAt
-  pdv          PDV      @relation(fields: [pdv_id], references: [id], onDelete: Cascade)
+  pdv            PDV      @relation(fields: [pdv_id], references: [id], onDelete: Cascade)
 
   @@unique([pdv_id, umbral_venta])
   @@index([pdv_id])
+}
+
+/// Parámetros globales del cálculo de sueldos. Fila única (id = 1): se lee con
+/// getConfigSueldos(), que devuelve los defaults si aún no existe.
+model ConfigNomina {
+  id                   Int      @id @default(1)
+  /// Pago por turno trabajado en CLP (planilla "Sueldos Feb 2026.xlsx", celda
+  /// P13 = $28.000). Es el valor por defecto de TODOS los vendedores;
+  /// Usuario.pago_diario lo sobreescribe cuando no es null.
+  pago_diario_base     Int      @default(28000)
+  /// Valor de UNA unidad de "Adicional"/Extra del turno (planilla, columna E:
+  /// TOTAL = pago diario + bono + 3.000 × E).
+  valor_extra          Int      @default(3000)
+  /// Cotizaciones sugeridas al liquidar un período (planilla, celda H164 =
+  /// $10.000 en febrero). Solo prellena el formulario: el monto realmente
+  /// aplicado queda congelado en PagoPersonal.monto_cotizaciones.
+  cotizaciones_default Int      @default(0)
+  /// Tolerancia de caja en CLP. El descuento por faltante se aplica solo si el
+  /// NETO de diferencias del período (sobrantes incluidos) es peor que −este
+  /// monto. Replica la fórmula IF(neto < −1000; neto; 0) de la planilla del
+  /// cliente ("Sueldos Feb 2026.xlsx", celda K162).
+  tolerancia_faltante  Int      @default(1000)
+  actualizado_en       DateTime @updatedAt
 }
 
 model Categoria {
@@ -80,17 +110,19 @@ model Categoria {
 }
 
 model Producto {
-  id            Int             @id @default(autoincrement())
+  id            Int               @id @default(autoincrement())
   categoria_id  Int
   nombre        String
   precio_venta  Int
   costo         Int
-  activo        Boolean         @default(true)
-  codigo_barra  String?         @unique
-  categoria     Categoria       @relation(fields: [categoria_id], references: [id])
+  activo        Boolean           @default(true)
+  codigo_barra  String?           @unique
+  categoria     Categoria         @relation(fields: [categoria_id], references: [id])
   inventarios   Inventario[]
   movimientos   MovimientoInv[]
   solicitudes   SolicitudItem[]
+  preparaciones PreparacionItem[]
+  ventas        VentaTurnoItem[]
 }
 
 model Inventario {
@@ -101,9 +133,9 @@ model Inventario {
   stock_critico Int      @default(0)
   pdv           PDV      @relation(fields: [pdv_id], references: [id])
   producto      Producto @relation(fields: [producto_id], references: [id])
+  // pdv_id ya indexado por MySQL como FK (@@unique también crea índice)
 
   @@unique([pdv_id, producto_id])
-  // pdv_id ya indexado por MySQL como FK (@@unique también crea índice)
 }
 
 enum EstadoTurno {
@@ -119,21 +151,129 @@ model TurnoCaja {
   fecha_cierre        DateTime?
   saldo_inicial       Int           @default(0)
   efectivo_declarado  Int?
-  diferencia_caja     Int?          // almacenado al cierre (auditabilidad financiera)
+  diferencia_caja     Int? // almacenado al cierre (auditabilidad financiera)
   venta_efectivo      Int?
   venta_tarjeta       Int?
   venta_transferencia Int?
-  total_calculado     Int?          // total declarado al cierre (stock flow)
+  total_calculado     Int? // total declarado al cierre (stock flow)
   estado              EstadoTurno   @default(ABIERTO)
+  // ── Recepción del dinero por admin/supervisor (2ª etapa del cierre) ──
+  // El vendedor cierra (efectivo_declarado = lo que dice entregar). Luego el
+  // admin/supervisor cuenta lo recibido en mano y confirma el término del turno.
+  dinero_recibido      Int?      // efectivo que el admin efectivamente recibió
+  recepcion_confirmada Boolean   @default(false)
+  recibido_por         Int?      // id del admin/supervisor que recibió (sin FK: snapshot)
+  recibido_por_nombre  String?   // nombre snapshot para mostrar aunque se elimine el usuario
+  fecha_recepcion      DateTime?
+  // Snapshot del stock final declarado al cierre: [{ productoId, cantidad }].
+  // Permite al admin ver los saldos finales del turno en el panel de Sucursales.
+  stock_final          Json?
+  // Snapshot del detalle de ventas declarado al cierre: [{ productoId, cantidad, precioUnitario }].
+  // Permite al admin ver el desglose por producto (unidades × precio) en Cierre de
+  // turno. El precio se guarda como snapshot (los precios pueden cambiar después).
+  // El vendedor NUNCA ve montos; el detalle es solo para el panel admin.
+  venta_detalle        Json?
+  // Lote de HistorialInventario que escribió el cierre. Es el ancla para poder
+  // REABRIR el turno: esas filas guardan el `saldo_anterior` de cada producto,
+  // así que permiten devolver el inventario al estado previo al cierre.
+  cierre_lote_id      String?   @db.VarChar(36)
+  // ── "Adicional"/Extra del turno (planilla "Sueldos Feb 2026.xlsx", columna E) ──
+  // Se expresa en DÉCIMAS para no romper la convención de enteros del proyecto:
+  // 0 = sin extra · 5 = 0,5 · 10 = 1 · 15 = 1,5. El monto en CLP se obtiene con
+  // calcularMontoExtra(): round(extra_decimas × ConfigNomina.valor_extra / 10).
+  // Lo carga el ADMIN al liquidar (el vendedor no lo ve en el POS).
+  extra_decimas       Int       @default(0)
+  // ── Pago del turno (C3/A39) ──
+  // Vínculo al PagoPersonal que liquidó este turno; null = aún no pagado.
+  // Es la guarda anti doble-pago: la generación solo toma turnos con pago_id null.
+  pago_id             Int?
+  pago                PagoPersonal? @relation(fields: [pago_id], references: [id])
   pdv                 PDV           @relation(fields: [pdv_id], references: [id])
   usuario             Usuario?      @relation(fields: [usuario_id], references: [id])
   gastos              GastoTurno[]
   depositos           Deposito[]
   retiros             RetiroTurno[]
+  solicitudes_gasto   SolicitudGasto[]
+  venta_items         VentaTurnoItem[]
 
-  // FK (pdv_id, usuario_id) ya indexadas por MySQL automáticamente
+  // FK (pdv_id, usuario_id, pago_id) ya indexadas por MySQL automáticamente.
+  // Los índices compuestos van primero porque MySQL solo usa uno por tabla y
+  // resuelven filtro + orden en una pasada (antes hacía filesort / index_merge):
+  //   (pdv_id, estado)         → "turno abierto de este PDV", la consulta más
+  //                              frecuente del sistema (cada request del POS).
+  //   (pdv_id, fecha_apertura) → turnos de una sucursal en un rango, ordenados por
+  //                              fecha (panel Sucursales, historial, métricas).
+  // fecha_apertura suelto se mantiene: hay consultas globales por rango sin PDV.
+  @@index([pdv_id, estado])
+  @@index([pdv_id, fecha_apertura])
   @@index([fecha_apertura])
   @@index([estado])
+}
+
+// ─── Detalle de ventas por producto (reportes) ────────────────────────────────
+// Espejo normalizado del snapshot `TurnoCaja.venta_detalle` (JSON). El JSON sigue
+// siendo la foto del cierre, pero no se puede agregar por SQL: "unidades vendidas
+// por producto en el mes" obligaba a recorrer JSON en la aplicación. Esta tabla se
+// escribe en la misma transacción del cierre y permite consultas/agregaciones
+// indexadas por producto y fecha.
+// `precio_unitario` es snapshot (el precio del producto puede cambiar después) y
+// `fecha` está desnormalizada (día del turno en Chile) para reportar por período
+// sin unir con TurnoCaja.
+
+model VentaTurnoItem {
+  id              Int      @id @default(autoincrement())
+  turno_id        Int
+  producto_id     Int
+  cantidad        Int
+  precio_unitario Int
+  fecha           DateTime @db.Date // día del turno (zona Chile)
+  turno           TurnoCaja @relation(fields: [turno_id], references: [id], onDelete: Cascade)
+  producto        Producto  @relation(fields: [producto_id], references: [id])
+
+  // Un turno declara una sola línea por producto: hace el cierre idempotente.
+  @@unique([turno_id, producto_id])
+  @@index([producto_id, fecha])
+  @@index([fecha])
+}
+
+// ─── Pago de personal (C3/A39) ────────────────────────────────────────────────
+// Liquidación flexible: el admin elige el rango (un día, una semana, un mes) y
+// genera un pago por vendedor con sus turnos CERRADOS + recepción confirmada de
+// ese rango. El cálculo replica la Nómina (base + bonos − faltantes de caja).
+// usuario_id sin FK dura (snapshot): el registro de pago sobrevive a la
+// eliminación del usuario, igual que recibido_por en TurnoCaja.
+model PagoPersonal {
+  id                Int         @id @default(autoincrement())
+  usuario_id        Int?
+  usuario_nombre    String // snapshot del nombre al momento de pagar
+  fecha_desde       DateTime    @db.Date
+  fecha_hasta       DateTime    @db.Date
+  dias_trabajados   Int
+  monto_base        Int // Σ pago diario por turno (planilla, columna I)
+  monto_bonos       Int // Σ bonos por venta (tramos ConfigBono; planilla, columna J)
+  monto_descuentos  Int // descuento por descuadre de caja (planilla, IF(H162 < −1000; H162; 0))
+  // ── Conceptos del cierre de período de la planilla (filas 162-164) ──
+  monto_extras       Int @default(0) // Σ 3.000 × extra de los turnos (planilla, columna E)
+  monto_adicional    Int @default(0) // ajuste manual del período (planilla, celda H163)
+  monto_cotizaciones Int @default(0) // descuento del período (planilla, celda H164)
+  // base + bonos + extras − descuentos + adicional − cotizaciones (planilla, K162)
+  monto_total       Int
+  creado_por_nombre String? // snapshot del admin que generó el pago
+  creado_en         DateTime    @default(now())
+  turnos            TurnoCaja[]
+
+  // ── Pago hecho con el efectivo de una sucursal ("Pagar a vendedor", planilla F29) ──
+  // Cuando el admin le paga al vendedor con la plata del punto, el monto sale del
+  // "a depositar" de ESE turno: se acumula en Deposito.pago_vendedor. Null en los
+  // pagos por período (Personal → Pagos), que no tocan ninguna caja.
+  // Sin FK dura, igual que usuario_id: son snapshots que sobreviven al borrado.
+  pdv_id            Int?
+  pdv_nombre        String?
+  turno_pago_id     Int? // turno cuyo depósito absorbe el descuento
+
+  @@index([usuario_id])
+  @@index([creado_en])
+  @@index([turno_pago_id])
 }
 
 // GastoTurno — gastos registrados durante el turno (art. aseo, líquidos, etc.)
@@ -165,6 +305,12 @@ model Deposito {
   turno_id      Int
   monto_teorico Int
   monto_real    Int
+  // Plata pagada al vendedor con el efectivo de ESTE punto (planilla del cliente,
+  // celda F29 "Pagado a Vendedor (DC)"). No llega al banco, así que se resta del
+  // teórico para obtener el "a depositar" real: A DEPOSITAR = monto_teorico − pago_vendedor.
+  // Se guarda aparte en vez de descontarlo del teórico para no perder el bruto
+  // (efectivo contado + retiros) ni la trazabilidad de por qué bajó.
+  pago_vendedor Int            @default(0)
   fecha         DateTime       @default(now())
   estado        EstadoDeposito @default(PENDIENTE)
   turno         TurnoCaja      @relation(fields: [turno_id], references: [id])
@@ -189,6 +335,7 @@ enum EstadoSolicitud {
   PENDIENTE
   DESPACHADA
   CONFIRMADA
+  RECHAZADA // bodega/admin rechaza un pedido que no se despachará (A18/H9)
 }
 
 model MovimientoInv {
@@ -207,7 +354,11 @@ model MovimientoInv {
   // producto_id ya indexado por MySQL como FK
   @@index([lote_id])
   @@index([fecha])
-  @@index([tipo])
+  // (tipo, fecha) reemplaza al índice suelto de `tipo`: el historial de despachos
+  // filtra tipo='TRASPASO' y ordena por fecha, y como casi todas las filas son
+  // TRASPASO el índice de una columna era inútil (MySQL lo descartaba y hacía
+  // full scan). Con el compuesto escanea en orden de fecha y corta con el LIMIT.
+  @@index([tipo, fecha])
 }
 
 /// Historial de ingresos/ajustes de stock en la Bodega Central.
@@ -218,12 +369,12 @@ model HistorialInventario {
   lote_id        String?  @db.VarChar(36) // agrupa los ítems guardados en un mismo "Guardar"
   inventario_id  Int?
   producto_id    Int?
-  nombre         String   // snapshot del nombre del ítem al momento del registro
+  nombre         String // snapshot del nombre del ítem al momento del registro
   saldo_anterior Int
   ingresos       Int
   utilizadas     Int
   saldo_nuevo    Int
-  usuario_id     Int?     // snapshot (sin FK): sobrevive a la eliminación del usuario
+  usuario_id     Int? // snapshot (sin FK): sobrevive a la eliminación del usuario
   usuario_nombre String?
   creado_en      DateTime @default(now())
 
@@ -248,11 +399,13 @@ model Solicitud {
   usuario_id   Int?
   estado       EstadoSolicitud @default(PENDIENTE)
   notas        String?
+  motivo_rechazo String?       // razón del rechazo (opcional), visible para el vendedor
   fecha        DateTime        @default(now())
   fecha_cierre DateTime?
   pdv          PDV             @relation(fields: [pdv_id], references: [id])
   usuario      Usuario?        @relation(fields: [usuario_id], references: [id])
   items        SolicitudItem[]
+  despachos    Despacho[] // despacho(s) que movieron stock para esta solicitud (A15)
 
   // pdv_id ya indexado por MySQL como FK
   @@index([estado])
@@ -271,15 +424,24 @@ model SolicitudItem {
 model Notificacion {
   id         Int      @id @default(autoincrement())
   usuario_id Int
+  // PDV al que pertenece el aviso (null = global, se ve en cualquier contexto).
+  // Los avisos de operación de sucursal (ej: "te llegó tu despacho") se etiquetan
+  // con su PDV para que el vendedor solo los vea en la sesión de esa sucursal —
+  // sin esto, un vendedor con turnos en dos PDV veía en uno el aviso del otro.
+  pdv_id     Int?
   titulo     String
   mensaje    String   @db.Text
   leida      Boolean  @default(false)
   fecha      DateTime @default(now())
   usuario    Usuario  @relation(fields: [usuario_id], references: [id], onDelete: Cascade)
 
-  // usuario_id ya indexado como FK por MySQL
-  @@index([leida])
+  // usuario_id ya indexado como FK por MySQL.
+  // (usuario_id, leida, fecha) sirve la campana de avisos —"mis no leídas, más
+  // recientes primero"— con filtro y orden en el mismo índice (antes: filesort).
+  // Reemplaza al índice suelto de `leida`, que por ser booleano no discriminaba.
+  @@index([usuario_id, leida, fecha])
   @@index([fecha])
+  @@index([pdv_id])
 }
 
 model TurnoPlaneado {
@@ -294,6 +456,125 @@ model TurnoPlaneado {
   @@unique([fecha, pdv_id])
   // usuario_id ya indexado por MySQL como FK; fecha cubierta por el @@unique
   @@index([fecha])
+}
+
+// ─── Preparación del siguiente turno ─────────────────────────────────────────
+// El admin/supervisor prepara los ingresos que recibirá una sucursal para un
+// turno futuro (por fecha). Preparar DESCUENTA stock de la bodega central (lo
+// reserva/pone "en tránsito"). Al abrir el turno, la vendedora verifica y el
+// ingreso preparado se SUMA al stock del PDV (stock = inicio + ingreso) y la
+// preparación pasa a CONFIRMADA. El movimiento bodega→PDV no se contabiliza dos
+// veces: bodega baja al preparar, el PDV sube al confirmar en la apertura.
+
+enum EstadoPreparacion {
+  PENDIENTE // preparada, stock ya reservado en bodega, aún no recibida
+  CONFIRMADA // la vendedora abrió el turno; ingreso sumado al PDV
+  ANULADA // cancelada por el admin; stock devuelto a bodega
+}
+
+model PreparacionTurno {
+  id                Int               @id @default(autoincrement())
+  pdv_id            Int
+  fecha             DateTime          @db.Date // fecha del turno para el que se prepara
+  estado            EstadoPreparacion @default(PENDIENTE)
+  notas             String?           @db.Text
+  creado_por_id     Int? // snapshot (sin FK): sobrevive a la eliminación del usuario
+  creado_por_nombre String?
+  creado_en         DateTime          @default(now())
+  actualizado_en    DateTime          @updatedAt
+  confirmado_en     DateTime?
+  pdv               PDV               @relation(fields: [pdv_id], references: [id])
+  items             PreparacionItem[]
+
+  @@unique([pdv_id, fecha]) // una preparación por sucursal y fecha
+  @@index([fecha])
+  @@index([estado])
+}
+
+model PreparacionItem {
+  id             Int              @id @default(autoincrement())
+  preparacion_id Int
+  producto_id    Int
+  cantidad       Int
+  preparacion    PreparacionTurno @relation(fields: [preparacion_id], references: [id], onDelete: Cascade)
+  producto       Producto         @relation(fields: [producto_id], references: [id])
+
+  @@unique([preparacion_id, producto_id])
+}
+
+// ─── Despacho (encabezado por lote) ──────────────────────────────────────────
+// Cada despacho bodega→PDV agrupa sus ítems por lote_id en MovimientoInv. Este
+// encabezado le da identidad y estado de recepción: al despachar queda ENVIADO y
+// notifica al vendedor; cuando el vendedor confirma pasa a CONFIRMADO. El stock
+// se suma al PDV de inmediato al despachar (no depende de la confirmación).
+
+enum EstadoDespacho {
+  ENVIADO
+  CONFIRMADO
+}
+
+model Despacho {
+  id                    Int            @id @default(autoincrement())
+  lote_id               String         @unique @db.VarChar(36)
+  pdv_destino_id        Int
+  usuario_envia_id      Int?
+  usuario_envia_nombre  String?
+  observacion           String?
+  estado                EstadoDespacho @default(ENVIADO)
+  confirmado_por_id     Int?
+  confirmado_por_nombre String?
+  confirmado_en         DateTime?
+  cantidad_items        Int            @default(0)
+  total_unidades        Int            @default(0)
+  creado_en             DateTime       @default(now())
+  // Solicitud que originó el despacho (A15): null = despacho ad-hoc sin solicitud.
+  // Los despachos con solicitud se confirman vía la solicitud, no como pendiente aparte.
+  solicitud_id          Int?
+  solicitud             Solicitud?     @relation(fields: [solicitud_id], references: [id])
+  pdv_destino           PDV            @relation(fields: [pdv_destino_id], references: [id])
+
+  @@index([pdv_destino_id])
+  @@index([estado])
+  @@index([creado_en])
+  @@index([solicitud_id])
+}
+
+// ─── Gasto con autorización ──────────────────────────────────────────────────
+// El vendedor solicita autorización de un gasto (monto + motivo + foto del
+// boucher). Supervisor/Admin aprueban o rechazan. Al aprobar, se crea un
+// GastoTurno vinculado al turno para que el gasto aparezca en el cierre de caja.
+
+enum EstadoGasto {
+  PENDIENTE
+  APROBADO
+  RECHAZADO
+}
+
+model SolicitudGasto {
+  id                    Int         @id @default(autoincrement())
+  turno_id              Int
+  pdv_id                Int
+  usuario_id            Int? // vendedor que solicita
+  usuario_nombre        String? // snapshot: sobrevive al borrado del usuario
+  monto                 Int
+  motivo                String      @db.Text
+  categoria             String? // categoría del gasto (Art Aseo, Líquidos, etc.)
+  foto                  String?     @db.LongText // boucher en base64 (data URI), comprimido en el navegador
+  estado                EstadoGasto @default(PENDIENTE)
+  resuelto_por_id       Int? // supervisor/admin que aprobó o rechazó
+  resuelto_por_nombre   String?
+  comentario_resolucion String?     @db.Text
+  gasto_turno_id        Int? // GastoTurno creado al aprobar (para reflejarlo en el cierre)
+  creado_en             DateTime    @default(now())
+  resuelto_en           DateTime?
+  turno                 TurnoCaja   @relation(fields: [turno_id], references: [id])
+  pdv                   PDV         @relation(fields: [pdv_id], references: [id])
+  usuario               Usuario?    @relation(fields: [usuario_id], references: [id])
+
+  @@index([estado])
+  @@index([turno_id])
+  @@index([pdv_id])
+  @@index([creado_en])
 }
 
 // ─── Módulo de Facturas de Proveedores ───────────────────────────────────────

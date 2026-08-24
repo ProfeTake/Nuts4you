@@ -15,17 +15,14 @@ import {
   ArrowDownRight,
   ArrowUpCircle,
   Loader2,
+  Package,
   PackagePlus,
-  Truck,
-  ChevronDown,
-  ChevronUp,
   Target,
   Plus,
   Pencil,
   Power,
   Trash2,
   X,
-  BarChart2,
   Settings2,
   Wallet,
   History,
@@ -52,27 +49,44 @@ import { Label } from "@/components/ui/label";
 
 // Tipos
 import type { PDVItem, ResumenSucursal, FaltanteVendedor, TurnoHistorial, VendedorOpcion } from "@/tipos/admin.tipos";
-import type { Solicitud, EstadoSolicitud } from "@/tipos/pos.tipos";
 
 // API + helpers
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { formatearCLP } from "@/lib/money";
+import { compararProductos } from "@/lib/categorias";
 import { useAuthStore } from "@/store/auth.store";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { PanelTurnosActivos } from "./PanelTurnosActivos";
+import { PagoVendedorCaja } from "./PagoVendedorCaja";
 
 // ─── Componente principal ───
 
 interface PDVCompleto { id: number; nombre: string; tipo: string; activo: boolean }
 
+/** Una línea del formulario de retiros (varios retiros en una sola pasada). */
+interface LineaRetiro { id: number; monto: string; descripcion: string }
+
+let _siguienteLineaId = 1;
+const nuevaLineaRetiro = (): LineaRetiro => ({ id: _siguienteLineaId++, monto: "", descripcion: "" });
+
+/** Líneas completas y válidas: con monto > 0 y justificación. */
+const lineasValidas = (lineas: LineaRetiro[]) =>
+  lineas
+    .map((l) => ({ monto: parseInt(l.monto, 10), descripcion: l.descripcion.trim() }))
+    .filter((l) => !isNaN(l.monto) && l.monto > 0 && l.descripcion.length > 0);
+
 export function ControlVentasSucursal() {
-  const [tab, setTab] = useState<"control" | "historial" | "gestionar">("control");
+  const [tab, setTab] = useState<"cierre" | "historial" | "gestionar">("cierre");
   const [pdvSeleccionado, setPdvSeleccionado] = useState<number | "">("");
   const [fechaSeleccionada, setFechaSeleccionada] = useState(
     new Date().toISOString().split("T")[0]
   );
-  const [montoRetiro, setMontoRetiro] = useState("");
-  const [descRetiro, setDescRetiro] = useState("");
+  // Varios retiros a la vez: en una misma visita al punto se saca plata por más
+  // de un motivo (depósito, pago a proveedor, vuelto) y cada uno necesita su
+  // propia justificación para que el cuadre sea auditable.
+  const [lineasRetiro, setLineasRetiro] = useState<LineaRetiro[]>([nuevaLineaRetiro()]);
+  const [dineroRecibido, setDineroRecibido] = useState("");
 
   const { usuario } = useAuthStore();
   const esAdminOSupervisor = usuario?.rol === "ADMIN" || usuario?.rol === "SUPERVISOR";
@@ -104,37 +118,139 @@ export function ControlVentasSucursal() {
       ).then((r) => r.data),
     enabled: !!pdvSeleccionado && !!fechaSeleccionada,
     retry: false,
+    // En "Cierre de Turno" refresca solo para que el reporte aparezca apenas
+    // el vendedor cierra su caja, sin tener que recargar a mano.
+    refetchInterval: tab === "cierre" ? 15_000 : false,
   });
 
   const sinDatos =
     isError && error instanceof Error && error.message.includes("No hay turno");
 
   const mutacionRetiro = useMutation({
-    mutationFn: ({ turnoId, monto, descripcion }: { turnoId: number; monto: number; descripcion?: string }) =>
-      apiPost(`/pos/turnos/${turnoId}/retiros`, { monto, descripcion }),
+    // Se registran de a uno y en serie: cada retiro es su propia fila auditable, y
+    // en serie el error identifica exactamente cuál falló. Se acumulan los que sí
+    // entraron para no volver a enviarlos si hay que reintentar.
+    mutationFn: async ({ turnoId, retiros }: { turnoId: number; retiros: { monto: number; descripcion: string }[] }) => {
+      const registrados: number[] = [];
+      for (const [i, r] of retiros.entries()) {
+        try {
+          await apiPost(`/pos/turnos/${turnoId}/retiros`, { monto: r.monto, descripcion: r.descripcion });
+          registrados.push(i);
+        } catch (err) {
+          const detalle = err instanceof Error ? err.message : "error desconocido";
+          throw new Error(
+            registrados.length > 0
+              ? `Se registraron ${registrados.length} retiro(s), pero falló "${r.descripcion}": ${detalle}. Los pendientes siguen en el formulario.`
+              : `No se pudo registrar "${r.descripcion}": ${detalle}`,
+          )
+        }
+      }
+      return registrados.length
+    },
+    onSuccess: (cantidad) => {
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "ventas-sucursal", pdvSeleccionado, fechaSeleccionada],
+      });
+      // El panel de turnos activos muestra los retiros acumulados del turno
+      queryClient.invalidateQueries({ queryKey: ["admin", "turnos-activos"] });
+      // El detalle de movimientos del turno abierto (retiros + gastos)
+      queryClient.invalidateQueries({ queryKey: ["admin", "movimientos-turno"] });
+      setLineasRetiro([nuevaLineaRetiro()]);
+      toast.success(
+        cantidad === 1 ? "Retiro registrado correctamente" : `${cantidad} retiros registrados correctamente`,
+      );
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Error al registrar retiro", { duration: 10000 });
+    },
+  });
+
+  const retirosAEnviar = lineasValidas(lineasRetiro);
+
+  const handleRetiro = () => {
+    if (!reporte || retirosAEnviar.length === 0) return;
+    mutacionRetiro.mutate({ turnoId: reporte.turnoId, retiros: retirosAEnviar });
+  };
+
+  const actualizarLinea = (id: number, campo: "monto" | "descripcion", valor: string) =>
+    setLineasRetiro((prev) => prev.map((l) => (l.id === id ? { ...l, [campo]: valor } : l)));
+  const agregarLinea  = () => setLineasRetiro((prev) => [...prev, nuevaLineaRetiro()]);
+  const quitarLinea   = (id: number) =>
+    setLineasRetiro((prev) => (prev.length === 1 ? prev : prev.filter((l) => l.id !== id)));
+
+  const totalAEnviar = retirosAEnviar.reduce((s, r) => s + r.monto, 0);
+  // Línea a medio llenar: se avisa para que no se pierda al enviar.
+  const hayLineaIncompleta = lineasRetiro.some(
+    (l) => (l.monto.trim() !== "" || l.descripcion.trim() !== "") &&
+           !(parseInt(l.monto, 10) > 0 && l.descripcion.trim() !== ""),
+  );
+
+  // ── Recepción del dinero (2ª etapa del cierre: admin/supervisor) ──
+  const mutacionRecepcion = useMutation({
+    mutationFn: ({ turnoId, dineroRecibido }: { turnoId: number; dineroRecibido: number }) =>
+      apiPatch(`/pos/turnos/${turnoId}/recepcion`, { dineroRecibido }),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["admin", "ventas-sucursal", pdvSeleccionado, fechaSeleccionada],
       });
-      setMontoRetiro("");
-      setDescRetiro("");
-      toast.success("Retiro registrado correctamente");
+      setDineroRecibido("");
+      toast.success("Turno finalizado: recepción confirmada");
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Error al registrar retiro");
+      toast.error(err instanceof Error ? err.message : "Error al confirmar la recepción");
     },
   });
 
-  const handleRetiro = () => {
+  const handleRecepcion = () => {
     if (!reporte) return;
-    const monto = parseInt(montoRetiro, 10);
-    if (isNaN(monto) || monto <= 0) return;
-    mutacionRetiro.mutate({
-      turnoId: reporte.turnoId,
-      monto,
-      descripcion: descRetiro.trim() || undefined,
-    });
+    const monto = parseInt(dineroRecibido.replace(/\D/g, ""), 10);
+    if (isNaN(monto) || monto < 0) return;
+    mutacionRecepcion.mutate({ turnoId: reporte.turnoId, dineroRecibido: monto });
   };
+
+  // ── Cierre administrativo: cerrar un turno que quedó ABIERTO sin cuadre ──
+  const [confirmandoCierreAdmin, setConfirmandoCierreAdmin] = useState(false);
+  const mutacionCierreAdmin = useMutation({
+    mutationFn: (turnoId: number) => apiPatch(`/pos/turnos/${turnoId}/cerrar-admin`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "ventas-sucursal", pdvSeleccionado, fechaSeleccionada],
+      });
+      // El turno deja de estar abierto: sale del panel de turnos activos
+      queryClient.invalidateQueries({ queryKey: ["admin", "turnos-activos"] });
+      setConfirmandoCierreAdmin(false);
+      toast.success("Turno cerrado administrativamente");
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "No se pudo cerrar el turno");
+    },
+  });
+
+  // ── Reabrir un turno mal cerrado (solo ADMIN) ──
+  const [confirmandoReapertura, setConfirmandoReapertura] = useState(false);
+  const mutacionReabrir = useMutation({
+    mutationFn: (turnoId: number) =>
+      apiPatch<{ data: { mensaje: string; productosRestaurados: number; stockRestaurable: boolean } }>(
+        `/pos/turnos/${turnoId}/reabrir`, {},
+      ),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "ventas-sucursal", pdvSeleccionado, fechaSeleccionada],
+      });
+      queryClient.invalidateQueries({ queryKey: ["admin", "turnos-activos"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "movimientos-turno"] });
+      setConfirmandoReapertura(false);
+      toast.success("Turno reabierto", {
+        description: res.data.stockRestaurable
+          ? `El vendedor puede volver a cuadrar. Stock restaurado en ${res.data.productosRestaurados} producto(s).`
+          : "El vendedor puede volver a cuadrar. Ojo: este turno se cerró antes de que se guardara el detalle del stock, así que el inventario NO se revirtió — revísalo a mano.",
+        duration: 12000,
+      });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "No se pudo reabrir el turno", { duration: 10000 });
+    },
+  });
 
   const pdvNombre = useMemo(
     () => pdvs.find((p) => p.id === pdvSeleccionado)?.nombre ?? "",
@@ -150,7 +266,7 @@ export function ControlVentasSucursal() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Control de Sucursales</h1>
           <p className="text-sm text-muted-foreground">
-            {tab === "control" ? "Resumen de ventas diarias por punto de venta" : tab === "historial" ? "Historial de turnos por sucursal" : "Administrar puntos de venta"}
+            {tab === "cierre" ? "Cierre de turno y ventas diarias por punto de venta" : tab === "historial" ? "Historial de turnos por sucursal" : "Administrar puntos de venta"}
           </p>
         </div>
       </div>
@@ -158,10 +274,10 @@ export function ControlVentasSucursal() {
       {/* ── Tabs ── */}
       <div className="flex gap-1 rounded-xl bg-muted p-1 w-fit flex-wrap">
         <button
-          onClick={() => setTab("control")}
-          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${tab === "control" ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+          onClick={() => setTab("cierre")}
+          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${tab === "cierre" ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
         >
-          <BarChart2 size={16} /> Control de Ventas
+          <Wallet size={16} /> Cierre y Ventas
         </button>
         <button
           onClick={() => setTab("historial")}
@@ -195,8 +311,21 @@ export function ControlVentasSucursal() {
         />
       )}
 
-      {/* ── TAB: CONTROL DE VENTAS ── */}
-      {tab === "control" && (<>
+      {/* ── TAB: CIERRE Y VENTAS ── */}
+      {tab === "cierre" && (<>
+
+      {/* ── Turnos abiertos ahora mismo ── */}
+      {esAdminOSupervisor && (
+        <PanelTurnosActivos
+          pdvSeleccionado={pdvSeleccionado}
+          onSeleccionar={(pdvId, diaApertura) => {
+            setPdvSeleccionado(pdvId);
+            // El reporte de abajo busca el turno por su día de apertura: para un
+            // turno arrastrado de días anteriores hay que pedir ESE día, no hoy.
+            setFechaSeleccionada(diaApertura);
+          }}
+        />
+      )}
 
       {/* ── Filtros: PDV + Fecha ── */}
       <div className="grid gap-4 sm:grid-cols-2">
@@ -408,6 +537,66 @@ export function ControlVentasSucursal() {
                     </Badge>
                   </div>
                 </div>
+                <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                  <AlertCircle className="size-4 shrink-0 text-amber-600 mt-0.5" />
+                  <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+                    El turno sigue <strong>abierto</strong>. El total vendido, el efectivo a entregar y los saldos finales
+                    aparecerán aquí cuando <strong>{reporte.vendedor}</strong> cierre su caja en el POS. Ahí podrás confirmar
+                    el dinero recibido y dar término al turno.
+                  </p>
+                </div>
+
+                {/* Cierre administrativo: para turnos que quedaron abiertos sin cuadre */}
+                {esAdminOSupervisor && (
+                  !confirmandoCierreAdmin ? (
+                    <div className="mt-3 flex flex-col gap-2 rounded-lg border border-dashed px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs text-muted-foreground">
+                        ¿Quedó abierto por error o el vendedor no lo cerró? Puedes cerrarlo tú.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 text-red-600 border-red-300 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:border-red-800 dark:hover:bg-red-950/30"
+                        onClick={() => setConfirmandoCierreAdmin(true)}
+                      >
+                        <Power className="size-4 mr-1.5" />
+                        Cerrar turno administrativamente
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-lg border border-red-300 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 px-4 py-3 space-y-2.5">
+                      <p className="text-xs text-red-700 dark:text-red-400">
+                        <strong>Cierre administrativo:</strong> el turno se cerrará <strong>sin ventas declaradas</strong> (en $0),
+                        porque el vendedor no cuadró su caja. Úsalo solo para desatascar turnos que quedaron abiertos.
+                        Esta acción no se puede deshacer.
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1"
+                          disabled={mutacionCierreAdmin.isPending}
+                          onClick={() => setConfirmandoCierreAdmin(false)}
+                        >
+                          Cancelar
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                          disabled={mutacionCierreAdmin.isPending}
+                          onClick={() => mutacionCierreAdmin.mutate(reporte.turnoId)}
+                        >
+                          {mutacionCierreAdmin.isPending ? (
+                            <Loader2 className="size-4 mr-1.5 animate-spin" />
+                          ) : (
+                            <Power className="size-4 mr-1.5" />
+                          )}
+                          Sí, cerrar turno
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                )}
               </CardContent>
             </Card>
           )}
@@ -430,37 +619,125 @@ export function ControlVentasSucursal() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Desglose de ventas */}
-                <div className="rounded-xl border bg-background overflow-hidden divide-y divide-border/60 text-sm">
-                  <FilaCuadreAdmin label="Total venta calculada" valor={formatearCLP(reporte.totalVentas)} claseValor="font-bold" />
-                  {reporte.ventaTarjeta > 0 && (
+                {/* Dos bloques separados a propósito: los retiros aparecen en ambos
+                    con signo opuesto (salen de la caja, pero igual van al banco) y
+                    en una lista plana eso se leía como un error de cálculo. */}
+
+                {/* 1. ¿Cuánto debía haber en la caja? */}
+                <div className="rounded-xl border bg-background overflow-hidden text-sm">
+                  <div className="border-b bg-muted/40 px-4 py-2">
+                    <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                      1 · Qué debía haber en la caja
+                    </p>
+                  </div>
+                  <div className="divide-y divide-border/60">
+                    <FilaCuadreAdmin label="Total venta calculada" valor={formatearCLP(reporte.totalVentas)} claseValor="font-bold" />
+                    {reporte.ventaTarjeta > 0 && (
+                      <FilaCuadreAdmin
+                        icono={<CreditCard className="size-3.5 text-blue-500" />}
+                        label="− Venta tarjeta"
+                        valor={`-${formatearCLP(reporte.ventaTarjeta)}`}
+                        claseValor="text-blue-600"
+                      />
+                    )}
+                    {reporte.ventaTransferencia > 0 && (
+                      <FilaCuadreAdmin
+                        icono={<ArrowLeftRight className="size-3.5 text-violet-500" />}
+                        label="− Venta transferencia"
+                        valor={`-${formatearCLP(reporte.ventaTransferencia)}`}
+                        claseValor="text-violet-600"
+                      />
+                    )}
+                    <FilaCuadreAdmin label="= Venta en efectivo" valor={formatearCLP(reporte.ventaEfectivo)} claseValor="font-semibold" />
+                    {/* Salidas de efectivo del turno: esa plata ya no estaba en la caja
+                        cuando el vendedor contó, así que baja el esperado. Sin estas dos
+                        filas un retiro grande se leía como faltante del vendedor. */}
+                    {reporte.totalGastos > 0 && (
+                      <FilaCuadreAdmin label="− Gastos pagados de la caja" valor={`-${formatearCLP(reporte.totalGastos)}`} claseValor="text-red-600" />
+                    )}
+                    {reporte.totalRetiros > 0 && (
+                      <FilaCuadreAdmin label="− Retiros del punto" valor={`-${formatearCLP(reporte.totalRetiros)}`} claseValor="text-orange-600" />
+                    )}
                     <FilaCuadreAdmin
-                      icono={<CreditCard className="size-3.5 text-blue-500" />}
-                      label="Venta tarjeta"
-                      valor={formatearCLP(reporte.ventaTarjeta)}
-                      claseValor="text-blue-600"
+                      label="= Esperado en caja"
+                      valor={formatearCLP(reporte.esperadoCaja)}
+                      claseValor={`font-bold ${reporte.esperadoCaja < 0 ? "text-red-600" : ""}`}
                     />
-                  )}
-                  {reporte.ventaTransferencia > 0 && (
                     <FilaCuadreAdmin
-                      icono={<ArrowLeftRight className="size-3.5 text-violet-500" />}
-                      label="Venta transferencia"
-                      valor={formatearCLP(reporte.ventaTransferencia)}
-                      claseValor="text-violet-600"
+                      label="Efectivo contado por el vendedor"
+                      valor={formatearCLP(reporte.efectivoDeclarado)}
+                      claseValor="font-semibold"
                     />
-                  )}
-                  <FilaCuadreAdmin label="Venta efectivo" valor={formatearCLP(reporte.ventaEfectivo)} />
-                  {reporte.totalRetiros > 0 && (
-                    <FilaCuadreAdmin label="+ Retiros" valor={formatearCLP(reporte.totalRetiros)} claseValor="text-orange-600" />
-                  )}
-                  <FilaCuadreAdmin label="A depositar (efectivo + retiros)" valor={formatearCLP(reporte.efectivoDeclarado + reporte.totalRetiros)} claseValor="font-bold text-primary" />
+                  </div>
                 </div>
 
-                {/* Efectivo declarado vs esperado */}
+                {/* Un esperado negativo es imposible: salió más plata de la caja de la
+                    que entró. Casi siempre es un retiro cargado al turno equivocado o
+                    con un cero de más; sin este aviso el error se leía como sobrante. */}
+                {reporte.esperadoCaja < 0 && (
+                  <div className="rounded-xl border-2 border-red-300 bg-red-50 px-4 py-3 dark:border-red-900/60 dark:bg-red-950/20">
+                    <p className="text-sm font-bold text-red-700 dark:text-red-400">
+                      ⚠ Los datos de este turno no cuadran
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-red-600 dark:text-red-400/90">
+                      El esperado en caja da <strong>negativo</strong>: entre retiros y gastos salieron{" "}
+                      <strong>{formatearCLP(reporte.totalRetiros + reporte.totalGastos)}</strong> de una caja que solo
+                      recibió <strong>{formatearCLP(reporte.ventaEfectivo)}</strong> en ventas al contado. Eso no puede
+                      pasar en la realidad, así que la diferencia de abajo no es un sobrante real — revisa los retiros
+                      registrados en este turno.
+                    </p>
+                  </div>
+                )}
+
+                {/* 2. ¿Cuánto va al banco? */}
+                <div className="rounded-xl border bg-background overflow-hidden text-sm">
+                  <div className="border-b bg-muted/40 px-4 py-2">
+                    <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                      2 · Qué debe llegar al banco
+                    </p>
+                  </div>
+                  <div className="divide-y divide-border/60">
+                    <FilaCuadreAdmin label="Efectivo que entrega el vendedor" valor={formatearCLP(reporte.efectivoAEntregar)} />
+                    {reporte.totalRetiros > 0 && (
+                      <FilaCuadreAdmin
+                        label="+ Retiros ya sacados del punto"
+                        valor={`+${formatearCLP(reporte.totalRetiros)}`}
+                        claseValor="text-orange-600"
+                      />
+                    )}
+                    {/* Pagos al vendedor hechos con este mismo efectivo: no llegan
+                        al banco (planilla del cliente, celda F29 "Pagado a Vendedor"). */}
+                    {reporte.pagoVendedorTotal > 0 && (
+                      <FilaCuadreAdmin
+                        icono={<User className="size-3.5 text-amber-500" />}
+                        label="− Pagado a vendedor/a desde esta caja"
+                        valor={`-${formatearCLP(reporte.pagoVendedorTotal)}`}
+                        claseValor="text-amber-600"
+                      />
+                    )}
+                    <FilaCuadreAdmin
+                      label="= A depositar"
+                      valor={formatearCLP(reporte.aDepositar)}
+                      claseValor={`font-bold ${reporte.aDepositar < 0 ? "text-red-600" : "text-primary"}`}
+                    />
+                    {/* La caja chica no participa del cuadre: se muestra como dato del
+                        punto (queda en la sucursal para el turno siguiente). */}
+                    {reporte.saldoInicial > 0 && (
+                      <FilaCuadreAdmin
+                        label="Caja chica que queda en el punto (fuera del cuadre)"
+                        valor={formatearCLP(reporte.saldoInicial)}
+                        claseValor="text-muted-foreground"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* Efectivo declarado / a entregar vs esperado */}
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="space-y-1">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Efectivo declarado</p>
-                    <p className="text-xl font-bold tabular-nums">{formatearCLP(reporte.efectivoDeclarado)}</p>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Efectivo a entregar</p>
+                    <p className="text-xl font-bold tabular-nums">{formatearCLP(reporte.efectivoAEntregar)}</p>
+                    <p className="text-[10px] text-muted-foreground">Efectivo de ventas contado (la caja chica queda en el punto)</p>
                   </div>
                   <div className="space-y-1">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Pago vendedor/a</p>
@@ -498,6 +775,267 @@ export function ControlVentasSucursal() {
                 {reporte.usuarioId && (
                   <HistorialFaltantes usuarioId={reporte.usuarioId} vendedor={reporte.vendedor} />
                 )}
+
+                {/* Reabrir el turno: para cuando el cuadre se declaró con datos
+                    equivocados. Solo ADMIN — deshace stock, depósito y cuadre. */}
+                {usuario?.rol === "ADMIN" && !confirmandoReapertura && (
+                  <div className="flex flex-col gap-2 rounded-lg border border-dashed px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs text-muted-foreground">
+                      ¿El cuadre quedó mal declarado? Puedes reabrir el turno para que se vuelva a cerrar.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => setConfirmandoReapertura(true)}
+                    >
+                      <History className="size-4 mr-1.5" />
+                      Reabrir turno
+                    </Button>
+                  </div>
+                )}
+                {usuario?.rol === "ADMIN" && confirmandoReapertura && (
+                  <div className="space-y-2.5 rounded-lg border border-amber-300 bg-amber-50/60 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/20">
+                    <p className="text-xs leading-relaxed text-amber-800 dark:text-amber-400">
+                      <strong>Se va a deshacer el cierre del turno #{reporte.turnoId}.</strong> El stock del punto
+                      vuelve al valor que tenía antes de cerrar, se elimina el depósito generado y se borra el cuadre
+                      declarado ({formatearCLP(reporte.efectivoDeclarado)} contados, diferencia{" "}
+                      {formatearCLP(reporte.diferenciaCaja)}). Si ya confirmaste la recepción del dinero, habrá que
+                      confirmarla de nuevo.
+                    </p>
+                    <p className="text-xs leading-relaxed text-amber-800 dark:text-amber-400">
+                      Los <strong>gastos y retiros no se tocan</strong>: son movimientos reales del punto. Si el error
+                      estaba ahí, corrígelos una vez reabierto el turno.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1"
+                        disabled={mutacionReabrir.isPending}
+                        onClick={() => setConfirmandoReapertura(false)}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="flex-1 bg-amber-600 hover:bg-amber-700 text-white"
+                        disabled={mutacionReabrir.isPending}
+                        onClick={() => mutacionReabrir.mutate(reporte.turnoId)}
+                      >
+                        {mutacionReabrir.isPending
+                          ? <Loader2 className="size-4 mr-1.5 animate-spin" />
+                          : <History className="size-4 mr-1.5" />}
+                        Sí, reabrir turno
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* ── Detalle de ventas por producto (solo turno CERRADO con snapshot) ── */}
+          {reporte.estado === "CERRADO" && reporte.detalleVentas.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <Package className="size-5" />
+                  Detalle de ventas — {pdvNombre}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Lo vendido por {reporte.vendedor} en este turno (unidades × precio). El vendedor no ve estos montos.
+                </p>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-y text-left text-muted-foreground bg-muted/40">
+                        <th className="px-4 py-2 font-medium">Producto</th>
+                        <th className="px-4 py-2 font-medium text-center">Cant.</th>
+                        <th className="px-4 py-2 font-medium text-right">Precio</th>
+                        <th className="px-4 py-2 font-medium text-right">Subtotal</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {/* Mismo orden que el Turno Activo (Mezclas → Paquetes →
+                          Promos → Líquidos, y dentro de cada uno Maní, Almendras,
+                          Nueces, Promo). Venía ordenado por subtotal, así que el
+                          admin leía los productos en un orden distinto al que la
+                          vendedora los cuenta. */}
+                      {[...reporte.detalleVentas].sort(compararProductos).map((d) => (
+                        <tr key={d.productoId} className="border-b last:border-0">
+                          <td className="px-4 py-2 font-medium whitespace-nowrap">{d.nombre}</td>
+                          <td className="px-4 py-2 text-center tabular-nums">{d.cantidad}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{formatearCLP(d.precioUnitario)}</td>
+                          <td className="px-4 py-2 text-right tabular-nums font-semibold">{formatearCLP(d.subtotal)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t bg-muted/30">
+                        <td className="px-4 py-2.5 font-bold" colSpan={3}>TOTAL VENDIDO</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums font-extrabold text-primary">
+                          {formatearCLP(reporte.detalleVentas.reduce((s, d) => s + d.subtotal, 0))}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* ── Recepción de dinero / Término de turno (admin/supervisor) ── */}
+          {esAdminOSupervisor && reporte.estado === "CERRADO" && (
+            reporte.recepcionConfirmada ? (
+              <Card className="border-emerald-500/50 bg-emerald-500/5">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                    <CheckCircle2 className="size-5 text-emerald-600" />
+                    Turno finalizado
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Dinero recibido</p>
+                      <p className="text-xl font-bold tabular-nums text-emerald-600">{formatearCLP(reporte.dineroRecibido ?? 0)}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Diferencia</p>
+                      {(() => {
+                        const dif = reporte.diferenciaRecepcion ?? 0;
+                        return (
+                          <p className={`text-xl font-bold tabular-nums ${dif < 0 ? "text-red-600" : dif === 0 ? "text-emerald-600" : "text-blue-600"}`}>
+                            {dif >= 0 ? "+" : ""}{formatearCLP(dif)}
+                          </p>
+                        );
+                      })()}
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Recibido por</p>
+                      <p className="text-base font-bold">{reporte.recibidoPor ?? "—"}</p>
+                      {reporte.fechaRecepcion && (
+                        <p className="text-[11px] text-muted-foreground">
+                          {new Date(reporte.fechaRecepcion).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card className="border-primary/40 bg-primary/5">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                    <Banknote className="size-5 text-primary" />
+                    Recepción de Dinero — Dar término al turno
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="rounded-lg bg-muted/50 px-4 py-2.5 flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Efectivo de ventas a entregar</span>
+                    <span className="text-sm font-bold tabular-nums">{formatearCLP(reporte.efectivoAEntregar)}</span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dinero-recibido">Dinero recibido en mano ($)</Label>
+                    <Input
+                      id="dinero-recibido"
+                      inputMode="numeric"
+                      placeholder="$0"
+                      value={dineroRecibido ? `$${(parseInt(dineroRecibido.replace(/\D/g, ""), 10) || 0).toLocaleString("es-CL")}` : ""}
+                      onChange={(e) => setDineroRecibido(e.target.value.replace(/\D/g, ""))}
+                      className="text-right h-12 text-lg font-bold"
+                    />
+                  </div>
+
+                  {/* Diferencia en vivo vs lo declarado por el vendedor */}
+                  {dineroRecibido !== "" && (() => {
+                    const recibidoNum = parseInt(dineroRecibido.replace(/\D/g, ""), 10) || 0;
+                    const dif = recibidoNum - reporte.efectivoAEntregar;
+                    return (
+                      <div className={`rounded-lg px-4 py-2.5 flex items-center justify-between border ${dif < 0 ? "border-red-500/40 bg-red-500/5" : dif === 0 ? "border-emerald-500/40 bg-emerald-500/5" : "border-blue-500/40 bg-blue-500/5"}`}>
+                        <span className="text-sm text-muted-foreground">Diferencia</span>
+                        <span className={`text-sm font-bold tabular-nums ${dif < 0 ? "text-red-600" : dif === 0 ? "text-emerald-600" : "text-blue-600"}`}>
+                          {dif >= 0 ? "+" : ""}{formatearCLP(dif)}
+                          {dif < 0 && <span className="ml-1.5 text-[10px] font-bold">⚠ falta</span>}
+                        </span>
+                      </div>
+                    );
+                  })()}
+
+                  <Button
+                    onClick={handleRecepcion}
+                    disabled={dineroRecibido === "" || mutacionRecepcion.isPending}
+                    className="w-full sm:w-auto"
+                  >
+                    {mutacionRecepcion.isPending ? (
+                      <Loader2 className="size-4 animate-spin mr-2" />
+                    ) : (
+                      <CheckCircle2 className="size-4 mr-2" />
+                    )}
+                    Confirmar cierre de turno
+                  </Button>
+                </CardContent>
+              </Card>
+            )
+          )}
+
+          {/* ── Pagar a vendedor con el efectivo del punto ── */}
+          {/* Sale del "a depositar" de este turno, como la celda F29 ("Pagado a
+              Vendedor") de la planilla del cliente. Solo ADMIN: los endpoints de
+              pagos viven en RRHH, que es ADMIN-only (A5/D1). */}
+          {usuario?.rol === "ADMIN" && reporte.estado === "CERRADO" && (
+            <PagoVendedorCaja
+              turnoId={reporte.turnoId}
+              pdvNombre={pdvNombre}
+              aDepositar={reporte.aDepositar}
+              depositoBloqueado={reporte.depositoBloqueado}
+              pagosVendedor={reporte.pagosVendedor}
+              onPagado={() =>
+                queryClient.invalidateQueries({
+                  queryKey: ["admin", "ventas-sucursal", pdvSeleccionado, fechaSeleccionada],
+                })
+              }
+            />
+          )}
+
+          {/* ── Saldos finales del turno (solo turno CERRADO con snapshot) ── */}
+          {reporte.estado === "CERRADO" && reporte.saldosFinales.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <PackagePlus className="size-5" />
+                  Saldos finales del turno — {pdvNombre}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Stock declarado por {reporte.vendedor} al cerrar (queda como inicio del próximo turno)
+                </p>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/40 text-left text-muted-foreground">
+                        <th className="px-4 py-2.5 font-semibold">Producto</th>
+                        <th className="px-4 py-2.5 font-semibold">Categoría</th>
+                        <th className="px-4 py-2.5 font-semibold text-right">Saldo final</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...reporte.saldosFinales].sort(compararProductos).map((s) => (
+                        <tr key={s.productoId} className="border-b last:border-0">
+                          <td className="px-4 py-2.5 font-medium">{s.nombre}</td>
+                          <td className="px-4 py-2.5 text-muted-foreground">{s.categoria}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{s.cantidad}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -521,48 +1059,81 @@ export function ControlVentasSucursal() {
                   </div>
                 )}
                 <div className="space-y-3">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="monto-retiro">Monto ($)</Label>
-                      <Input
-                        id="monto-retiro"
-                        type="number"
-                        min={1}
-                        step={1000}
-                        placeholder="Ej: 50000"
-                        value={montoRetiro}
-                        onChange={(e) => setMontoRetiro(e.target.value)}
-                      />
+                  {/* Una fila por retiro: cada salida de plata lleva su propia
+                      justificación, si no el cuadre queda con un monto grande sin
+                      explicar. El "+" agrega filas para registrarlas de una vez. */}
+                  {lineasRetiro.map((linea, i) => (
+                    <div key={linea.id} className="grid gap-3 sm:grid-cols-[1fr_1.5fr_auto] sm:items-end">
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`monto-retiro-${linea.id}`} className={i > 0 ? "sr-only sm:not-sr-only" : ""}>
+                          Monto ($)
+                        </Label>
+                        <Input
+                          id={`monto-retiro-${linea.id}`}
+                          type="number"
+                          min={1}
+                          step={1000}
+                          placeholder="Ej: 50000"
+                          value={linea.monto}
+                          onChange={(e) => actualizarLinea(linea.id, "monto", e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`desc-retiro-${linea.id}`} className={i > 0 ? "sr-only sm:not-sr-only" : ""}>
+                          Justificación <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          id={`desc-retiro-${linea.id}`}
+                          placeholder="Motivo del retiro (obligatorio)"
+                          value={linea.descripcion}
+                          onChange={(e) => actualizarLinea(linea.id, "descripcion", e.target.value)}
+                          maxLength={200}
+                        />
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-9 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
+                        title="Quitar este retiro"
+                        disabled={lineasRetiro.length === 1}
+                        onClick={() => quitarLinea(linea.id)}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="desc-retiro">
-                        Justificación <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="desc-retiro"
-                        placeholder="Motivo del retiro (obligatorio)"
-                        value={descRetiro}
-                        onChange={(e) => setDescRetiro(e.target.value)}
-                        maxLength={200}
-                      />
-                    </div>
-                  </div>
-                  {!descRetiro.trim() && montoRetiro && (
-                    <p className="text-xs text-destructive">Debes ingresar una justificación para registrar el retiro.</p>
+                  ))}
+
+                  {hayLineaIncompleta && (
+                    <p className="text-xs text-destructive">
+                      Hay un retiro sin monto o sin justificación: complétalo o quítalo. Solo se registrarán las filas completas.
+                    </p>
                   )}
-                  <Button
-                    onClick={handleRetiro}
-                    disabled={!montoRetiro || !descRetiro.trim() || mutacionRetiro.isPending}
-                    className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white"
-                  >
-                    {mutacionRetiro.isPending ? (
-                      <Loader2 className="size-4 animate-spin mr-2" />
-                    ) : (
-                      <ArrowUpCircle className="size-4 mr-2" />
-                    )}
-                    Registrar retiro
-                  </Button>
+
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <Button variant="outline" size="sm" onClick={agregarLinea} className="w-full sm:w-auto">
+                      <Plus className="size-4 mr-1" /> Agregar otro retiro
+                    </Button>
+                    <Button
+                      onClick={handleRetiro}
+                      disabled={retirosAEnviar.length === 0 || mutacionRetiro.isPending}
+                      className="w-full sm:w-auto sm:ml-auto bg-amber-600 hover:bg-amber-700 text-white"
+                    >
+                      {mutacionRetiro.isPending ? (
+                        <Loader2 className="size-4 animate-spin mr-2" />
+                      ) : (
+                        <ArrowUpCircle className="size-4 mr-2" />
+                      )}
+                      {retirosAEnviar.length > 1
+                        ? `Registrar ${retirosAEnviar.length} retiros · ${formatearCLP(totalAEnviar)}`
+                        : "Registrar retiro"}
+                    </Button>
+                  </div>
                 </div>
+
+                {/* Movimientos ya registrados en el turno: sin esto el admin no
+                    tenía forma de ver qué se retiró ni en qué se gastó, solo el
+                    total, y no podía detectar un retiro duplicado. */}
+                <MovimientosTurno turnoId={reporte.turnoId} puedeBorrar={usuario?.rol === "ADMIN"} />
               </CardContent>
             </Card>
           )}
@@ -622,10 +1193,8 @@ export function ControlVentasSucursal() {
         </>
       )}
 
-      <Separator />
-
-      {/* ── Solicitudes de insumos ── */}
-      <SolicitudesPendientes queryClient={queryClient} />
+      {/* Las solicitudes de insumos se despachan desde Bodega → tab Solicitudes:
+          despachar mueve stock real y necesita el stock de bodega al lado (A15). */}
 
       </> )} {/* fin tab control */}
     </div>
@@ -712,7 +1281,9 @@ function HistorialSucursal({ pdvs, cargandoPdvs }: { pdvs: PDVItem[]; cargandoPd
             disabled={cargandoPdvs}
           >
             <SelectTrigger>
-              <SelectValue placeholder={cargandoPdvs ? "Cargando…" : "Selecciona una sucursal"} />
+              <SelectValue placeholder={cargandoPdvs ? "Cargando…" : "Selecciona una sucursal"}>
+                {pdvId !== "" ? pdvs.find(p => p.id === pdvId)?.nombre : undefined}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {pdvs.map(p => (
@@ -769,7 +1340,9 @@ function HistorialSucursal({ pdvs, cargandoPdvs }: { pdvs: PDVItem[]; cargandoPd
             onValueChange={v => setVendedorId(v === "todos" ? "" : Number(v))}
           >
             <SelectTrigger className="w-full sm:w-64">
-              <SelectValue />
+              <SelectValue>
+                {vendedorId === "" ? "Todos los vendedores" : vendedores.find(v => v.id === vendedorId)?.nombre}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="todos">Todos los vendedores</SelectItem>
@@ -967,6 +1540,148 @@ function FilaCuadreAdmin({
   );
 }
 
+// ─── MovimientosTurno ─────────────────────────────────────────────────────────
+// Retiros y gastos ya registrados en un turno abierto. Ambos salen del efectivo
+// de la caja, así que bajan el "esperado" del cuadre: verlos detallados evita
+// registrar un retiro dos veces y explica de dónde sale cada peso que falta.
+
+interface RetiroTurno { id: number; monto: number; descripcion: string | null; realizadoPor: string; fechaHora: string }
+interface GastoTurno  { id: number; descripcion: string; monto: number }
+
+function MovimientosTurno({ turnoId, puedeBorrar }: { turnoId: number; puedeBorrar: boolean }) {
+  const queryClient = useQueryClient();
+  const [borrando, setBorrando] = useState<string | null>(null);
+
+  const mutBorrar = useMutation({
+    mutationFn: ({ tipo, id }: { tipo: "retiro" | "gasto"; id: number }) =>
+      apiDelete(`/pos/turnos/${turnoId}/${tipo === "retiro" ? "retiros" : "gastos"}/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "movimientos-turno", turnoId] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "ventas-sucursal"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "turnos-activos"] });
+      setBorrando(null);
+      toast.success("Movimiento eliminado");
+    },
+    onError: (err) => {
+      setBorrando(null);
+      toast.error(err instanceof Error ? err.message : "No se pudo eliminar", { duration: 8000 });
+    },
+  });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin", "movimientos-turno", turnoId],
+    // Cada lista falla por su cuenta: si una no responde se muestra la otra en
+    // vez de dejar el panel entero en blanco.
+    queryFn: async () => {
+      const [retiros, gastos] = await Promise.all([
+        apiGet<{ data: RetiroTurno[] }>(`/pos/turnos/${turnoId}/retiros`).then((r) => r.data).catch(() => [] as RetiroTurno[]),
+        apiGet<{ data: GastoTurno[] }>(`/pos/turnos/${turnoId}/gastos`).then((r) => r.data).catch(() => [] as GastoTurno[]),
+      ]);
+      return { retiros, gastos };
+    },
+  });
+
+  if (isLoading) return (
+    <div className="flex items-center gap-2 pt-1 text-xs text-muted-foreground">
+      <Loader2 size={13} className="animate-spin" /> Cargando movimientos…
+    </div>
+  );
+  if (!data) return null;
+
+  const { retiros, gastos } = data;
+  if (retiros.length === 0 && gastos.length === 0) return null;
+
+  const totalRetiros = retiros.reduce((s, r) => s + r.monto, 0);
+  const totalGastos  = gastos.reduce((s, g) => s + g.monto, 0);
+
+  return (
+    <div className="rounded-xl border bg-background overflow-hidden">
+      <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-2">
+        <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+          Movimientos del turno
+        </p>
+        <span className="text-xs font-semibold tabular-nums text-muted-foreground">
+          Sale de caja: {formatearCLP(totalRetiros + totalGastos)}
+        </span>
+      </div>
+      <div className="divide-y text-sm">
+        {retiros.map((r) => (
+          <div key={`r-${r.id}`} className="flex items-center justify-between gap-3 px-4 py-2">
+            <div className="min-w-0">
+              <p className="truncate font-medium">{r.descripcion ?? "Retiro de efectivo"}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                Retiro · {r.realizadoPor} · {r.fechaHora}
+              </p>
+            </div>
+            <span className="shrink-0 font-bold tabular-nums text-orange-600">−{formatearCLP(r.monto)}</span>
+            {puedeBorrar && (
+              <BotonBorrarMovimiento
+                activo={borrando === `r-${r.id}`}
+                pendiente={mutBorrar.isPending}
+                onPedir={() => setBorrando(`r-${r.id}`)}
+                onCancelar={() => setBorrando(null)}
+                onConfirmar={() => mutBorrar.mutate({ tipo: "retiro", id: r.id })}
+              />
+            )}
+          </div>
+        ))}
+        {gastos.map((g) => (
+          <div key={`g-${g.id}`} className="flex items-center justify-between gap-3 px-4 py-2">
+            <div className="min-w-0">
+              <p className="truncate font-medium">{g.descripcion}</p>
+              <p className="text-xs text-muted-foreground">Gasto del turno</p>
+            </div>
+            <span className="shrink-0 font-bold tabular-nums text-red-600">−{formatearCLP(g.monto)}</span>
+            {puedeBorrar && (
+              <BotonBorrarMovimiento
+                activo={borrando === `g-${g.id}`}
+                pendiente={mutBorrar.isPending}
+                onPedir={() => setBorrando(`g-${g.id}`)}
+                onCancelar={() => setBorrando(null)}
+                onConfirmar={() => mutBorrar.mutate({ tipo: "gasto", id: g.id })}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Borrar un movimiento pide confirmación en el mismo lugar: borrarlo cambia el
+ * cuadre del turno, así que un clic accidental no debe bastar.
+ */
+function BotonBorrarMovimiento({ activo, pendiente, onPedir, onCancelar, onConfirmar }: {
+  activo: boolean; pendiente: boolean;
+  onPedir: () => void; onCancelar: () => void; onConfirmar: () => void;
+}) {
+  if (!activo) {
+    return (
+      <Button
+        variant="ghost" size="icon" title="Eliminar este movimiento"
+        className="size-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+        onClick={onPedir}
+      >
+        <Trash2 className="size-3.5" />
+      </Button>
+    );
+  }
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={onCancelar} disabled={pendiente}>
+        Cancelar
+      </Button>
+      <Button
+        size="sm" className="h-8 px-2 text-xs bg-destructive hover:bg-destructive/90 text-white"
+        onClick={onConfirmar} disabled={pendiente}
+      >
+        {pendiente ? <Loader2 className="size-3.5 animate-spin" /> : "Eliminar"}
+      </Button>
+    </div>
+  );
+}
+
 // ─── HistorialFaltantes ───────────────────────────────────────────────────────
 
 function HistorialFaltantes({ usuarioId, vendedor }: { usuarioId: number; vendedor: string }) {
@@ -1013,9 +1728,13 @@ function HistorialFaltantes({ usuarioId, vendedor }: { usuarioId: number; vended
           </div>
         ))}
       </div>
+      {/* El descuento no es faltante a faltante: al pagar se suma el neto del
+          período (los sobrantes compensan) y solo se descuenta si queda peor que
+          la tolerancia configurada en Personal → Pagos. */}
       <div className="px-4 py-2.5 bg-red-100/50 dark:bg-red-950/30 border-t border-red-200 dark:border-red-900">
         <p className="text-xs text-red-700 dark:text-red-400 font-medium">
-          Estos montos se descontarán del pago final del vendedor/a.
+          Al pagar se descuenta el <strong>neto</strong> del período (los sobrantes compensan),
+          y solo si supera la tolerancia de caja configurada.
         </p>
       </div>
     </div>
@@ -1042,116 +1761,6 @@ function TarjetaVenta({ label, monto }: TarjetaVentaProps) {
       </CardContent>
     </Card>
   );
-}
-
-// ─── Subcomponente: Solicitudes pendientes ────────────────────────────────────
-
-import type { QueryClient } from "@tanstack/react-query";
-
-const ESTADO_LABEL: Record<EstadoSolicitud, string> = {
-  PENDIENTE:  "Pendiente",
-  DESPACHADA: "Despachada",
-  CONFIRMADA: "Confirmada",
-}
-
-function SolicitudesPendientes({ queryClient }: { queryClient: QueryClient }) {
-  const [expandida, setExpandida] = useState(true)
-
-  const { data: solicitudes = [], isLoading } = useQuery({
-    queryKey: ["solicitudes", "admin"],
-    queryFn:  () => apiGet<{ data: Solicitud[] }>("/solicitudes").then(r => r.data),
-    refetchInterval: 30_000,
-  })
-
-  const mutDespachar = useMutation({
-    mutationFn: (id: number) => apiPatch<{ data: Solicitud }>(`/solicitudes/${id}/despachar`, {}).then(r => r.data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["solicitudes", "admin"] })
-      toast.success("Solicitud marcada como despachada")
-    },
-    onError: (e: Error) => toast.error(e.message),
-  })
-
-  const pendientes  = solicitudes.filter(s => s.estado === "PENDIENTE")
-  const despachadas = solicitudes.filter(s => s.estado === "DESPACHADA")
-  const activas     = [...pendientes, ...despachadas]
-
-  return (
-    <div>
-      <button
-        onClick={() => setExpandida(p => !p)}
-        className="flex w-full items-center justify-between py-1"
-      >
-        <div className="flex items-center gap-2">
-          <PackagePlus size={18} className="text-primary" />
-          <h2 className="text-lg font-bold">Solicitudes de Insumos</h2>
-          {pendientes.length > 0 && (
-            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[11px] font-bold text-white">
-              {pendientes.length}
-            </span>
-          )}
-        </div>
-        {expandida ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
-      </button>
-
-      {expandida && (
-        <div className="mt-4 space-y-3">
-          {isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
-              <Loader2 size={16} className="animate-spin" /> Cargando…
-            </div>
-          ) : activas.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">
-              No hay solicitudes pendientes de despacho.
-            </p>
-          ) : (
-            activas.map(sol => (
-              <Card key={sol.id} className={`border-l-4 ${sol.estado === "PENDIENTE" ? "border-l-amber-400" : "border-l-blue-400"}`}>
-                <CardContent className="p-4 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="font-semibold text-sm">{sol.pdvNombre}</p>
-                      <p className="text-xs text-muted-foreground">{sol.solicitante} · {new Date(sol.fecha).toLocaleDateString("es-CL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</p>
-                    </div>
-                    <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                      sol.estado === "PENDIENTE"
-                        ? "bg-amber-100 text-amber-700"
-                        : "bg-blue-100 text-blue-700"
-                    }`}>
-                      {ESTADO_LABEL[sol.estado as EstadoSolicitud]}
-                    </span>
-                  </div>
-
-                  <div className="space-y-1">
-                    {sol.items.map(it => (
-                      <div key={it.id} className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>{it.producto}</span>
-                        <span className="font-bold text-foreground tabular-nums">×{it.cantidad}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {sol.notas && (
-                    <p className="text-xs text-muted-foreground italic">"{sol.notas}"</p>
-                  )}
-
-                  {sol.estado === "PENDIENTE" && (
-                    <button
-                      onClick={() => mutDespachar.mutate(sol.id)}
-                      disabled={mutDespachar.isPending}
-                      className="w-full h-9 rounded-lg bg-blue-600 text-xs font-bold text-white hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
-                    >
-                      <Truck size={14} /> Marcar como Despachada
-                    </button>
-                  )}
-                </CardContent>
-              </Card>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  )
 }
 
 // ─── GestorPDVs ──────────────────────────────────────────────────────────────

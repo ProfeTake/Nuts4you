@@ -5,7 +5,7 @@ import {
   ShieldAlert, Store, ChevronDown, ChevronUp, Trash2,
   CheckSquare2, Square, ClipboardList, History,
   BadgeDollarSign, StickyNote, Eye, Plus, X, Settings2,
-  Loader2,
+  Loader2, Clock, User, CheckCircle2,
 } from "lucide-react";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
@@ -37,6 +37,16 @@ interface TareaAPI {
   id:    number;
   label: string;
   orden: number;
+}
+
+interface TurnoActivo {
+  turnoId:          number;
+  pdvId:            number;
+  pdvNombre:        string;
+  vendedor:         string | null;
+  horaApertura:     string;
+  saldoInicial:     number;
+  yaTieneCierreHoy: boolean;
 }
 
 // ─── Tarjeta de cierre en el historial ────────────────────────────────────────
@@ -179,13 +189,17 @@ function TarjetaCierre({
 function FormCierrePreventivo({
   pdvs,
   tareasBase,
+  pdvId,
+  onPdvChange,
   onGuardar,
   onCancelar,
   guardando,
 }: {
-  pdvs:       PDVItem[];
-  tareasBase: TareaAPI[];
-  onGuardar:  (data: {
+  pdvs:        PDVItem[];
+  tareasBase:  TareaAPI[];
+  pdvId:       number | null;
+  onPdvChange: (id: number) => void;
+  onGuardar:   (data: {
     pdvId: number;
     montoRetiro: number;
     checklist: ChecklistItem[];
@@ -195,7 +209,6 @@ function FormCierrePreventivo({
   onCancelar: () => void;
   guardando:  boolean;
 }) {
-  const [pdvId,         setPdvId]         = useState<number | null>(null);
   const [montoRetiro,   setMontoRetiro]   = useState("");
   const [checklist,     setChecklist]     = useState<ChecklistItem[]>(() =>
     tareasBase.map((t) => ({ label: t.label, marcado: false }))
@@ -239,7 +252,7 @@ function FormCierrePreventivo({
           <Label>Punto de venta visitado</Label>
           <Select
             value={pdvId?.toString() ?? ""}
-            onValueChange={(v) => setPdvId(Number(v))}
+            onValueChange={(v) => onPdvChange(Number(v))}
           >
             <SelectTrigger>
               <SelectValue placeholder="Seleccionar sucursal">
@@ -500,6 +513,99 @@ function GestorPlantilla({ tareas, cargando }: { tareas: TareaAPI[]; cargando: b
   );
 }
 
+// ─── Panel de turnos activos (selector visual) ─────────────────────────────────
+
+function PanelTurnosActivos({
+  turnos,
+  cargando,
+  pdvSeleccionado,
+  onSeleccionar,
+}: {
+  turnos:          TurnoActivo[];
+  cargando:        boolean;
+  pdvSeleccionado: number | null;
+  onSeleccionar:   (pdvId: number) => void;
+}) {
+  return (
+    <div className="rounded-xl border bg-card p-4 sm:p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="relative flex size-2.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex size-2.5 rounded-full bg-emerald-500" />
+          </span>
+          <p className="text-sm font-semibold">Turnos activos ahora</p>
+        </div>
+        {!cargando && (
+          <Badge variant="outline" className="text-xs">
+            {turnos.length} abierto{turnos.length !== 1 ? "s" : ""}
+          </Badge>
+        )}
+      </div>
+
+      {cargando ? (
+        <div className="flex items-center justify-center py-6 gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" /> Cargando turnos abiertos…
+        </div>
+      ) : turnos.length === 0 ? (
+        <div className="rounded-lg border border-dashed bg-muted/10 px-4 py-6 text-center text-sm text-muted-foreground">
+          No hay turnos abiertos en este momento. Igual puedes seleccionar la sucursal manualmente abajo.
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Toca un turno para autocompletar la sucursal del cierre.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {turnos.map((t) => {
+              const sel  = pdvSeleccionado === t.pdvId;
+              const hora = new Date(t.horaApertura).toLocaleTimeString("es-CL", {
+                hour: "2-digit", minute: "2-digit",
+              });
+              return (
+                <button
+                  key={t.turnoId}
+                  type="button"
+                  onClick={() => onSeleccionar(t.pdvId)}
+                  className={`text-left rounded-xl border px-3.5 py-3 transition-colors ${
+                    sel
+                      ? "border-amber-400 bg-amber-50 dark:bg-amber-950/20 ring-1 ring-amber-400"
+                      : "hover:bg-muted/40"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 font-semibold text-sm truncate">
+                      <Store className="size-3.5 text-muted-foreground shrink-0" />
+                      {t.pdvNombre}
+                    </span>
+                    {sel && <CheckCircle2 className="size-4 text-amber-600 shrink-0" />}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <User className="size-3" />{t.vendedor ?? "Sin vendedor"}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="size-3" />Abrió {hora}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <BadgeDollarSign className="size-3" />Inicio {formatearCLP(t.saldoInicial)}
+                    </span>
+                  </div>
+                  {t.yaTieneCierreHoy && (
+                    <Badge className="mt-2 text-[10px] bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400">
+                      Ya tiene cierre preventivo hoy
+                    </Badge>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export function GestorCierrePreventivo() {
@@ -511,6 +617,9 @@ export function GestorCierrePreventivo() {
   const [filtroPdv,   setFiltroPdv]   = useState("TODOS");
   const [filtroDesde, setFiltroDesde] = useState("");
   const [filtroHasta, setFiltroHasta] = useState("");
+  // PDV seleccionado para el nuevo cierre (elevado desde el form para que las
+  // tarjetas de "turnos activos" puedan autocompletarlo).
+  const [pdvIdForm,   setPdvIdForm]   = useState<number | null>(null);
 
   // ── Queries ──────────────────────────────────────────────────────────────────
 
@@ -526,6 +635,16 @@ export function GestorCierrePreventivo() {
     queryKey: ["checklist-tareas"],
     queryFn:  () =>
       apiGet<{ data: TareaAPI[] }>("/cierres-preventivos/tareas").then((r) => r.data),
+  });
+
+  // Turnos abiertos ahora mismo — para elegir con facilidad a cuál hacerle el
+  // cierre. Solo se consulta en el tab "nuevo"; refresca cada 30s.
+  const { data: turnosActivos = [], isLoading: cargandoTurnos } = useQuery({
+    queryKey: ["turnos-activos-cierre"],
+    queryFn:  () =>
+      apiGet<{ data: TurnoActivo[] }>("/cierres-preventivos/turnos-activos").then((r) => r.data),
+    enabled: tab === "nuevo",
+    refetchInterval: 30_000,
   });
 
   const queryParams = new URLSearchParams();
@@ -547,9 +666,20 @@ export function GestorCierrePreventivo() {
   const mutRegistrar = useMutation({
     mutationFn: (body: object) =>
       apiPost<{ data: CierrePreventivo }>("/cierres-preventivos", body),
-    onSuccess: () => {
-      toast.success("Cierre preventivo registrado correctamente");
+    onSuccess: (res) => {
+      const alerta = res.data.alertaRetiro;
+      if (alerta) {
+        toast.warning(
+          `Cierre registrado. Ojo: declaraste un retiro de ${formatearCLP(alerta.montoDeclarado)} ` +
+          `pero solo hay ${formatearCLP(alerta.retiroRegistrado)} registrado como retiro del turno. ` +
+          `Registra el retiro real en el POS para no descuadrar.`,
+        );
+      } else {
+        toast.success("Cierre preventivo registrado correctamente");
+      }
       queryClient.invalidateQueries({ queryKey: ["cierres-preventivos"] });
+      queryClient.invalidateQueries({ queryKey: ["turnos-activos-cierre"] });
+      setPdvIdForm(null);
       setTab("historial");
     },
     onError: (err: unknown) =>
@@ -629,12 +759,20 @@ export function GestorCierrePreventivo() {
         </TabsList>
 
         {/* ── Tab: Nuevo cierre ── */}
-        <TabsContent value="nuevo">
+        <TabsContent value="nuevo" className="space-y-4">
+          <PanelTurnosActivos
+            turnos={turnosActivos}
+            cargando={cargandoTurnos}
+            pdvSeleccionado={pdvIdForm}
+            onSeleccionar={setPdvIdForm}
+          />
           <div className="rounded-xl border bg-card p-6">
             <FormCierrePreventivo
               key={tareas.map((t) => t.id).join(",")}
               pdvs={pdvs}
               tareasBase={tareas}
+              pdvId={pdvIdForm}
+              onPdvChange={setPdvIdForm}
               onGuardar={handleGuardar}
               onCancelar={() => setTab("historial")}
               guardando={mutRegistrar.isPending}
@@ -648,7 +786,13 @@ export function GestorCierrePreventivo() {
             <Select value={filtroPdv} onValueChange={(v) => setFiltroPdv(v ?? "TODOS")}>
               <SelectTrigger className="w-48">
                 <Store className="size-3.5 mr-1.5 text-muted-foreground" />
-                <SelectValue placeholder="Todas las sucursales" />
+                {/* La etiqueta va como children: Base UI muestra el value crudo
+                    si no se le pasa (decía el id de la sucursal). */}
+                <SelectValue placeholder="Todas las sucursales">
+                  {filtroPdv === "TODOS"
+                    ? "Todas las sucursales"
+                    : pdvs.find((p) => String(p.id) === filtroPdv)?.nombre}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="TODOS">Todas las sucursales</SelectItem>

@@ -7,7 +7,7 @@ import Login from "@/paginas/Login";
 import AperturaTurno from "@/paginas/AperturaTurno";
 import POSDashboard from "@/paginas/POSDashboard";
 import SolicitudesPDV from "@/paginas/SolicitudesPDV";
-import { ReporteDiarioSucursal } from "@/componentes/admin/ReporteDiarioSucursal";
+import MisCierres from "@/paginas/MisCierres";
 
 // Admin
 import {
@@ -15,11 +15,13 @@ import {
   PanelAdmin,
   ControlVentasSucursal,
   GestorInventario,
-  DepositosFinanzas,
+  Finanzas,
   ModuloRRHH,
   GestorUsuarios,
-  GestorFacturas,
   GestorCierrePreventivo,
+  PreparacionSiguienteTurno,
+  HorariosTurnos,
+  AutorizarGastos,
 } from "@/componentes/admin";
 
 // Layouts
@@ -67,7 +69,7 @@ function LayoutPOS({ usuario, pdv, horaIngreso, onCerrarSesion, onVolverAdmin }:
       <Routes>
         <Route index element={<POSDashboard />} />
         <Route path="solicitudes" element={<SolicitudesPDV />} />
-        <Route path="registro-diario" element={<ReporteDiarioSucursal />} />
+        <Route path="mis-cierres" element={<MisCierres />} />
       </Routes>
     </BarraLateral>
   );
@@ -87,10 +89,17 @@ function LayoutAdminConRutas({ onCerrarSesion, onEntrarModoPos }: LayoutAdminCon
         <Route index element={<PanelAdmin />} />
         <Route path="sucursales" element={<ControlVentasSucursal />} />
         <Route path="cierre-preventivo" element={<GestorCierrePreventivo />} />
+        <Route path="preparacion" element={<PreparacionSiguienteTurno />} />
+        <Route path="gastos" element={<AutorizarGastos />} />
         <Route path="bodega" element={<GestorInventario />} />
-        <Route path="finanzas" element={<DepositosFinanzas />} />
-        <Route path="facturas" element={<GestorFacturas />} />
+        <Route path="finanzas" element={<Finanzas />} />
+        {/* Facturas ahora es una pestaña dentro de Finanzas; se mantiene la ruta
+            por si hay enlaces guardados al módulo antiguo. */}
+        <Route path="facturas" element={<Finanzas />} />
         <Route path="personal" element={<ModuloRRHH />} />
+        {/* Horarios en solo-lectura: pensado para SUPERVISOR (ver turnos sin editar).
+            El ADMIN los edita desde Personal → pestaña Horarios. */}
+        <Route path="horarios" element={<HorariosTurnos soloLectura />} />
         <Route path="usuarios" element={<GestorUsuarios />} />
       </Routes>
     </LayoutAdmin>

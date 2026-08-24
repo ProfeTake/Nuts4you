@@ -10,6 +10,7 @@ import {
   Store,
   Warehouse,
   Landmark,
+  Calendar,
   Users,
   UserCog,
   Menu,
@@ -18,10 +19,12 @@ import {
   LogOut,
   ShoppingBag,
   ChevronRight,
-  Receipt,
   ShieldAlert,
+  PackagePlus,
+  HandCoins,
 } from "lucide-react";
 
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { apiGet } from "@/lib/api";
@@ -30,6 +33,7 @@ import type { PDVActivo } from "@/tipos/pos.tipos";
 import type { PaginaAdmin } from "@/tipos/admin.tipos";
 import { ContextoAdminMenu } from "@/hooks/useMenuAdmin";
 import { useAuthStore } from "@/store/auth.store";
+import { PanelNotificaciones } from "@/componentes/layout/PanelNotificaciones";
 
 // ─── Tipos internos ───
 
@@ -53,17 +57,22 @@ const ITEMS_ADMIN: ItemNav[] = [
   { clave: "sucursales",        ruta: "/admin/sucursales",        label: "Sucursales",      icono: <Store className="size-5" /> },
   { clave: "cierre-preventivo", ruta: "/admin/cierre-preventivo", label: "Cierre Prev.",    icono: <ShieldAlert className="size-5" /> },
   { clave: "bodega",            ruta: "/admin/bodega",            label: "Bodega",          icono: <Warehouse className="size-5" /> },
+  { clave: "preparacion",       ruta: "/admin/preparacion",       label: "Prep. Turno",     icono: <PackagePlus className="size-5" /> },
   { clave: "finanzas",          ruta: "/admin/finanzas",          label: "Finanzas",        icono: <Landmark className="size-5" /> },
-  { clave: "facturas",          ruta: "/admin/facturas",          label: "Facturas",        icono: <Receipt className="size-5" /> },
+  { clave: "gastos",            ruta: "/admin/gastos",            label: "Gastos",          icono: <HandCoins className="size-5" /> },
   { clave: "personal",          ruta: "/admin/personal",          label: "Personal",        icono: <Users className="size-5" /> },
   { clave: "usuarios",          ruta: "/admin/usuarios",          label: "Usuarios",        icono: <UserCog className="size-5" /> },
 ];
 
-// Supervisor: solo ve operaciones del día (sin resúmenes mensuales, RRHH ni usuarios)
+// Supervisor: operaciones del día + facturas/proveedores, pero SIN RRHH/Nómina
+// (sueldos) ni usuarios (D1/P1). El backend también lo bloquea, no solo el menú.
 const ITEMS_SUPERVISOR: ItemNav[] = [
   { clave: "sucursales",        ruta: "/admin/sucursales",        label: "Sucursales",   icono: <Store className="size-5" /> },
   { clave: "cierre-preventivo", ruta: "/admin/cierre-preventivo", label: "Cierre Prev.", icono: <ShieldAlert className="size-5" /> },
   { clave: "bodega",            ruta: "/admin/bodega",            label: "Bodega",       icono: <Warehouse className="size-5" /> },
+  { clave: "preparacion",       ruta: "/admin/preparacion",       label: "Prep. Turno",  icono: <PackagePlus className="size-5" /> },
+  { clave: "horarios",          ruta: "/admin/horarios",          label: "Horarios",     icono: <Calendar className="size-5" /> },
+  { clave: "gastos",            ruta: "/admin/gastos",            label: "Gastos",       icono: <HandCoins className="size-5" /> },
   { clave: "finanzas",          ruta: "/admin/finanzas",          label: "Finanzas",     icono: <Landmark className="size-5" /> },
 ];
 
@@ -77,6 +86,18 @@ export function LayoutAdmin({ onCerrarSesion, onEntrarModoPos, children }: Admin
   const [pdvs, setPdvs] = useState<PDVActivo[]>([]);
   const { usuario } = useAuthStore();
   const ITEMS_NAV = usuario?.rol === "ADMIN" ? ITEMS_ADMIN : ITEMS_SUPERVISOR;
+
+  // Aviso de solicitudes de gasto pendientes → badge en el ítem "Gastos".
+  // Refresca solo cada 20s para que el admin/supervisor sepa que hay pendientes
+  // sin tener que entrar a la pantalla. Deshabilitado en demo (no está simulado).
+  const { data: pendientesGasto = 0 } = useQuery({
+    queryKey: ["solicitudes-gasto", "pendientes-contar"],
+    queryFn: () =>
+      apiGet<{ data: { pendientes: number } }>("/solicitudes-gasto/pendientes/contar")
+        .then((r) => r.data.pendientes),
+    enabled: !usuario?.esDemo,
+    refetchInterval: 20_000,
+  });
 
   // Carga los PDVs disponibles cuando abre el selector
   useEffect(() => {
@@ -113,6 +134,10 @@ export function LayoutAdmin({ onCerrarSesion, onEntrarModoPos, children }: Admin
           </p>
           <p className="text-xs text-muted-foreground">Panel Admin</p>
         </div>
+        {/* Campana de notificaciones — solo desktop (en móvil va en el header) */}
+        <div className="ml-auto hidden lg:block">
+          <PanelNotificaciones />
+        </div>
       </div>
 
       <Separator />
@@ -134,6 +159,11 @@ export function LayoutAdmin({ onCerrarSesion, onEntrarModoPos, children }: Admin
               >
                 {item.icono}
                 {item.label}
+                {item.clave === "gastos" && pendientesGasto > 0 && (
+                  <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold leading-none text-white">
+                    {pendientesGasto}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -236,6 +266,10 @@ export function LayoutAdmin({ onCerrarSesion, onEntrarModoPos, children }: Admin
               <span className="text-sm font-bold tracking-tight">
                 Nuts 4 You
               </span>
+            </div>
+            {/* Campana de notificaciones (móvil) */}
+            <div className="ml-auto">
+              <PanelNotificaciones />
             </div>
           </header>
 

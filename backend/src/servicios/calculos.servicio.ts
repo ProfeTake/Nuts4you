@@ -6,15 +6,15 @@
  * Dinero siempre en CLP (enteros, sin decimales).
  */
 
-// ─── Tabla de bonos por sucursal ─────────────────────────────────────────────
+// ─── Tabla de bonos por sucursal (FALLBACK) ──────────────────────────────────
 // Fuente: archivo Excel "Sueldos Feb 2026.xlsx" — fórmulas verificadas.
 // Estructura: umbrales ordenados de mayor a menor (primer match gana).
 //
-// ⚠️ ADVERTENCIA: Las claves son los nombres EXACTOS del PDV en la BD (ver seed.ts).
-// Si un admin renombra un PDV desde la UI, calcularBono() devolverá 0 silenciosamente
-// para todos los turnos de ese PDV. No hay vínculo por ID.
-// TODO P6: migrar a tabla `ConfigBono` en BD usando pdv_id como clave (umbral_venta,
-// monto_bono, activo) para que el admin edite umbrales sin tocar código.
+// La fuente de verdad es la tabla `ConfigBono` en BD (clave: pdv_id), editable
+// desde el panel admin. Esta tabla en código se usa SOLO como fallback por
+// nombre de PDV cuando un punto de venta aún no tiene tramos configurados
+// (ej. recién creado); configBono.servicio.tramosParaPdv deja un warn en el
+// log cada vez que eso ocurre, porque el fallback se rompe si renombran el PDV.
 
 export interface TramoBonoItem {
   umbral: number  // venta mínima diaria en CLP para obtener este bono
@@ -70,22 +70,61 @@ export function calcularBono(tramos: TramoBonoItem[] | undefined, ventaDiaria: n
   return 0
 }
 
-/** Calcula el monto "A Depositar" del turno */
-export function calcularADepositar(
-  efectivoDeclarado: number,
+// ─── Cuadre de caja ──────────────────────────────────────────────────────────
+// Identidades tomadas de la planilla del cliente ("01 Mall Patio Feb 2026.xlsx",
+// hoja de día, celdas P15/P21/P22/P24/P25/P26):
+//
+//   ventaEfectivo = totalVenta − tarjeta − transferencia          (P30)
+//   esperadoCaja  = ventaEfectivo − gastos − retiros
+//   diferencia    = efectivoContado − esperadoCaja                (P26)
+//   aDepositar    = efectivoContado + retiros                     (P22)
+//
+// La CAJA CHICA queda fuera del cuadre: el vendedor cuenta y entrega solo el
+// efectivo de ventas, y ese fondo se mantiene en el punto para el turno siguiente.
+
+/**
+ * Venta cobrada en efectivo: el total declarado menos lo que se cobró por medios
+ * que no dejan billetes en la caja.
+ */
+export function calcularVentaEfectivo(
+  totalVenta: number,
+  ventaTarjeta: number,
+  ventaTransferencia: number
+): number {
+  return totalVenta - ventaTarjeta - ventaTransferencia
+}
+
+/**
+ * Efectivo que debería quedar físicamente en la caja al cierre: la venta en
+ * efectivo menos lo que salió de esa caja durante el turno (gastos pagados en
+ * efectivo y retiros hechos por admin/supervisor).
+ */
+export function calcularEsperadoCaja(
+  ventaEfectivo: number,
   gastosTurno: number,
   retiros: number
 ): number {
-  return efectivoDeclarado - gastosTurno - retiros
+  return ventaEfectivo - gastosTurno - retiros
 }
 
-/** Calcula la diferencia de caja (sobrante/faltante) */
+/** Calcula la diferencia de caja (positivo = sobrante, negativo = faltante) */
 export function calcularDiferencia(
-  ventaEfectivoTeorica: number,
-  efectivoDeclarado: number
+  esperadoCaja: number,
+  efectivoContado: number
 ): number {
-  // Positivo = sobrante, Negativo = faltante
-  return efectivoDeclarado - ventaEfectivoTeorica
+  return efectivoContado - esperadoCaja
+}
+
+/**
+ * Monto "A Depositar" del turno: el efectivo de ventas contado más lo que ya se
+ * retiró del punto (ese dinero también debe llegar al banco). Los gastos NO se
+ * restan: se pagaron con billetes que por eso ya no están en la caja contada.
+ */
+export function calcularADepositar(
+  efectivoContado: number,
+  retiros: number
+): number {
+  return efectivoContado + retiros
 }
 
 /** Calcula saldo actual de un producto: inicial + ingresos - utilizado */

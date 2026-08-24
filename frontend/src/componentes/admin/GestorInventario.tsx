@@ -3,13 +3,14 @@
 // Tabla con saldo, ingresos, utilizadas y estado de stock.
 // Panel de entregas pendientes a sucursales.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import {
   Pencil,
   Trash2,
   Package,
+  PackagePlus,
   GlassWater,
   Search,
   Truck,
@@ -20,6 +21,7 @@ import {
   History as HistoryIcon,
   CalendarDays,
   X,
+  TrendingUp,
 } from "lucide-react";
 import { ModalEscáner } from "@/componentes/bodega/EscánerCodigos";
 import { CatálogoCodigos } from "@/componentes/bodega/CatálogoCodigos";
@@ -27,6 +29,7 @@ import { CatálogoCodigos } from "@/componentes/bodega/CatálogoCodigos";
 // shadcn/ui
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { FormularioDespacho } from "./FormularioDespacho";
+import { SolicitudesBodega } from "./SolicitudesBodega";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,9 +42,12 @@ import type {
   CategoriaBodega,
   EstadoStock,
 } from "@/tipos/admin.tipos";
+import type { Solicitud } from "@/tipos/pos.tipos";
 
 // API
 import { apiGet, apiPatch, apiPost, apiDelete } from "@/lib/api";
+import { formatearCLP } from "@/lib/money";
+import { compararProductos } from "@/lib/categorias";
 import { useAuthStore } from "@/store/auth.store";
 import { toast } from "sonner";
 
@@ -53,6 +59,7 @@ interface ItemBodegaAPI {
   nombre:       string;
   categoria:    string;
   precioVenta:  number;
+  costo:        number;
   stockActual:  number;
   stockCritico: number;
 }
@@ -75,6 +82,9 @@ interface DespachoEvento {
   destino:       string;
   cantidadItems: number;
   totalUnidades: number;
+  estado:        "ENVIADO" | "CONFIRMADO" | null;
+  confirmadoPor: string | null;
+  confirmadoEn:  string | null;
   items:         DespachoItemDetalle[];
 }
 
@@ -121,10 +131,14 @@ function mapearItem(api: ItemBodegaAPI): ItemBodega {
       : "STOCK OK";
 
   return {
-    id:           String(api.inventarioId), // ← inventarioId para PATCH
-    item:         api.nombre,
-    categoria:    categoriaAPI(api.categoria),
-    saldoInicial: saldoActual, // punto de partida = stock actual persistido
+    id:              String(api.inventarioId), // ← inventarioId para PATCH
+    productoId:      api.productoId,            // para ordenar como el Turno Activo
+    item:            api.nombre,
+    categoria:       categoriaAPI(api.categoria),
+    categoriaNombre: api.categoria,  // nombre real (para regla de precio)
+    precioVenta:     api.precioVenta,
+    costo:           api.costo,
+    saldoInicial:    saldoActual, // punto de partida = stock actual persistido
     ingresos:     0,
     utilizadas:   0,
     saldoActual,
@@ -135,6 +149,14 @@ function mapearItem(api: ItemBodegaAPI): ItemBodega {
 }
 
 // Helpers
+
+/** Orden del Turno Activo aplicado a un ItemBodega: Mezclas → Paquetes → Promos →
+ *  Líquidos → Helados → Conos, y por productoId (Maní, Almendras, Nueces…) dentro. */
+const compararItemBodega = (a: ItemBodega, b: ItemBodega) =>
+  compararProductos(
+    { categoria: a.categoriaNombre ?? "", productoId: a.productoId },
+    { categoria: b.categoriaNombre ?? "", productoId: b.productoId },
+  );
 
 // ─── Helpers de estado de stock ───
 
@@ -169,13 +191,27 @@ interface FormItem {
   nombre:       string;
   stockActual:  number;
   stockCritico: number;
+  precioVenta:  number;
+  costo:        number;
 }
 
 const FORM_VACIO: FormItem = {
   nombre:       "",
   stockActual:  0,
   stockCritico: 0,
+  precioVenta:  0,
+  costo:        0,
 };
+
+// El ADMIN puede editar el precio de venta en toda categoría vendible; solo las
+// materias primas (Mezclas) quedan fuera (se cocinan en paquetes, no se venden).
+// Denylist en vez de allowlist: así Promos, Helados y categorías nuevas no se
+// quedan sin input de precio (tolerante a mayúsculas/acentos).
+const CATEGORIAS_SIN_PRECIO = new Set(["mezclas"]);
+const normalizarCategoria = (s: string) =>
+  s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+const categoriaPermitePrecio = (categoriaNombre?: string) =>
+  !!categoriaNombre && !CATEGORIAS_SIN_PRECIO.has(normalizarCategoria(categoriaNombre));
 
 // ─── Edición inline de la tabla ───
 // Borrador por fila (clave = inventarioId): nombre + ingresos/utilizadas escritos.
@@ -212,6 +248,7 @@ export function GestorInventario() {
   const queryClient = useQueryClient();
   const rolUsuario = useAuthStore((s) => s.usuario?.rol);
   const puedeVerCosto = rolUsuario !== "VENDEDOR";
+  const esAdmin = rolUsuario === "ADMIN";
 
   const { data: stockApi, isLoading: cargando } = useQuery({
     queryKey: ["bodega", "stock"],
@@ -236,7 +273,20 @@ export function GestorInventario() {
       apiGet<{ data: DespachoEvento[] }>("/bodega/despachos")
         .then((r) => r.data)
         .catch(() => [] as DespachoEvento[]),
+    refetchInterval: 20_000, // ver "Confirmado" apenas el vendedor confirma
   });
+
+  // Solo para el contador del tab "Solicitudes": comparte queryKey (y por lo
+  // tanto caché y refetch) con SolicitudesBodega, así no se pide dos veces.
+  const { data: solicitudes = [] } = useQuery({
+    queryKey: ["solicitudes", "bodega"],
+    queryFn: () =>
+      apiGet<{ data: Solicitud[] }>("/solicitudes")
+        .then((r) => r.data)
+        .catch(() => [] as Solicitud[]),
+    refetchInterval: 30_000,
+  });
+  const solicitudesPendientes = solicitudes.filter((s) => s.estado === "PENDIENTE").length;
 
   // Despachos realizados dentro del mes actual (para el dashboard de bodega)
   const despachosDelMes = useMemo(() => {
@@ -251,11 +301,15 @@ export function GestorInventario() {
   const [detalleDespacho, setDetalleDespacho] = useState<DespachoEvento | null>(null);
 
   const mutacionAjuste = useMutation({
-    mutationFn: ({ inventarioId, data }: { inventarioId: number; data: FormItem }) =>
+    mutationFn: ({ inventarioId, data, incluirPrecio, incluirCosto }: { inventarioId: number; data: FormItem; incluirPrecio: boolean; incluirCosto: boolean }) =>
       apiPatch(`/bodega/stock/${inventarioId}`, {
         nombre:       data.nombre.trim() || undefined,
         stockActual:  data.stockActual,
         stockCritico: data.stockCritico,
+        // Solo se envía si el usuario es ADMIN y la categoría lo permite (el backend revalida).
+        ...(incluirPrecio ? { precioVenta: data.precioVenta } : {}),
+        // Costo: solo ADMIN, cualquier categoría (C7/A42).
+        ...(incluirCosto ? { costo: data.costo } : {}),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bodega", "stock"] });
@@ -266,6 +320,24 @@ export function GestorInventario() {
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Error al actualizar stock");
+    },
+  });
+
+  // Merma explícita (C6/A40): POST /bodega/stock/:id/merma → MovimientoInv MERMA
+  // + HistorialInventario, en vez de esconder la baja en un ajuste genérico.
+  const mutacionMerma = useMutation({
+    mutationFn: ({ inventarioId, cantidad, motivo }: { inventarioId: number; cantidad: number; motivo: string }) =>
+      apiPost(`/bodega/stock/${inventarioId}/merma`, { cantidad, motivo }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bodega", "stock"] });
+      queryClient.invalidateQueries({ queryKey: ["bodega", "historial"] });
+      toast.success("Merma registrada");
+      setDialogAbierto(false);
+      setForm(FORM_VACIO);
+      setEditandoId(null);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Error al registrar la merma");
     },
   });
 
@@ -325,14 +397,12 @@ export function GestorInventario() {
     },
   });
 
-  // Estado local
-  const [items, setItems] = useState<ItemBodega[]>([]);
+  // El stock viene del servidor y nunca se edita en sitio: lo que el admin escribe
+  // vive en `borrador`. Por eso se deriva de la query en vez de copiarse a estado
+  // local con un efecto, que renderizaba dos veces por cada refresco.
+  const items: ItemBodega[] = useMemo(() => stockApi ?? [], [stockApi]);
   // Borrador de edición inline (clave = inventarioId)
   const [borrador, setBorrador] = useState<Record<string, DraftRow>>({});
-
-  useEffect(() => {
-    if (stockApi) setItems(stockApi);
-  }, [stockApi]);
 
   // Lee el borrador de una fila o sus valores por defecto
   const draftDe = useCallback(
@@ -349,7 +419,7 @@ export function GestorInventario() {
         return { ...prev, [item.id]: { ...actual, [campo]: limpio } };
       });
     },
-    []
+    [setBorrador]
   );
 
   // Ítems con cambios reales (ingresos/utilizadas > 0 o nombre distinto)
@@ -383,13 +453,20 @@ export function GestorInventario() {
   const [dialogAbierto, setDialogAbierto] = useState(false);
   const [editandoId, setEditandoId] = useState<string | null>(null);
   const [form, setForm] = useState<FormItem>(FORM_VACIO);
+  // ¿Se muestra/edita el precio? Solo ADMIN y categorías de venta (Paquetes/Líquidos/Conos).
+  const [precioEditable, setPrecioEditable] = useState(false);
+  // Merma explícita (C6/A40): baja con causa, separada del ajuste genérico.
+  const [mermaCantidad, setMermaCantidad] = useState("");
+  const [mermaMotivo, setMermaMotivo] = useState("");
 
   // Dialog crear
   const [crearAbierto, setCrearAbierto] = useState(false);
   const [formCrear, setFormCrear] = useState<FormCrear>(FORM_CREAR_VACIO);
   const [nuevaCategoriaMode, setNuevaCategoriaMode] = useState(false);
 
-  const abrirCrearConCodigo = useCallback(async (codigo: string) => {
+  // Sin useCallback: React Compiler memoiza automáticamente y la versión
+  // manual no podía preservarse (react-hooks/preserve-manual-memoization).
+  const abrirCrearConCodigo = async (codigo: string) => {
     try {
       await apiGet(`/bodega/buscar-codigo?codigo=${encodeURIComponent(codigo)}`);
       toast.info("Ese código ya está registrado en el sistema");
@@ -398,7 +475,7 @@ export function GestorInventario() {
       setNuevaCategoriaMode(false);
       setCrearAbierto(true);
     }
-  }, []);
+  };
 
   // Dialog eliminar
   const [eliminandoId, setEliminandoId] = useState<string | null>(null);
@@ -411,11 +488,11 @@ export function GestorInventario() {
   }, [items, busqueda]);
 
   const mezclas = useMemo(
-    () => itemsFiltrados.filter((i) => i.categoria === "mezclas"),
+    () => itemsFiltrados.filter((i) => i.categoria === "mezclas").sort(compararItemBodega),
     [itemsFiltrados]
   );
   const liquidos = useMemo(
-    () => itemsFiltrados.filter((i) => i.categoria === "liquidos"),
+    () => itemsFiltrados.filter((i) => i.categoria === "liquidos").sort(compararItemBodega),
     [itemsFiltrados]
   );
 
@@ -427,24 +504,43 @@ export function GestorInventario() {
   }, [items]);
 
   // ── Abrir dialog para editar ──
-  const abrirEditar = useCallback(
-    (item: ItemBodega) => {
-      setEditandoId(item.id);
-      setForm({
-        nombre:       item.item,
-        stockActual:  item.saldoActual,
-        stockCritico: item.stockMinimo,
-      });
-      setDialogAbierto(true);
-    },
-    []
-  );
+  // Sin useCallback: React Compiler memoiza automáticamente y la versión manual
+  // no podía preservarse (react-hooks/preserve-manual-memoization).
+  const abrirEditar = (item: ItemBodega) => {
+    setEditandoId(item.id);
+    setForm({
+      nombre:       item.item,
+      stockActual:  item.saldoActual,
+      stockCritico: item.stockMinimo,
+      precioVenta:  item.precioVenta ?? 0,
+      costo:        item.costo ?? 0,
+    });
+    setPrecioEditable(esAdmin && categoriaPermitePrecio(item.categoriaNombre));
+    setMermaCantidad("");
+    setMermaMotivo("");
+    setDialogAbierto(true);
+  };
+
+  // ── Registrar merma (C6/A40) ──
+  const registrarMerma = () => {
+    if (!editandoId) return;
+    const cantidad = parseInt(mermaCantidad, 10);
+    if (isNaN(cantidad) || cantidad <= 0) {
+      toast.error("Ingresa una cantidad de merma válida");
+      return;
+    }
+    if (!mermaMotivo.trim()) {
+      toast.error("Indica el motivo de la merma (ej: vencido, dañado)");
+      return;
+    }
+    mutacionMerma.mutate({ inventarioId: Number(editandoId), cantidad, motivo: mermaMotivo.trim() });
+  };
 
   // ── Guardar — llama a PATCH /api/bodega/stock/:inventarioId ──
   const guardar = useCallback(() => {
     if (!editandoId) return;
-    mutacionAjuste.mutate({ inventarioId: Number(editandoId), data: form });
-  }, [form, editandoId, mutacionAjuste]);
+    mutacionAjuste.mutate({ inventarioId: Number(editandoId), data: form, incluirPrecio: precioEditable, incluirCosto: esAdmin });
+  }, [form, editandoId, mutacionAjuste, precioEditable, esAdmin]);
 
   // ── Eliminar ──
   const confirmarEliminar = useCallback(() => {
@@ -455,7 +551,7 @@ export function GestorInventario() {
     <K extends keyof FormItem>(campo: K, valor: FormItem[K]) => {
       setForm((prev) => ({ ...prev, [campo]: valor }));
     },
-    []
+    [setForm]
   );
 
   if (cargando) {
@@ -539,7 +635,7 @@ export function GestorInventario() {
 
       {/* ── Tabs: Mezclas/Conos | Líquidos | Despachos | Códigos | Historial ── */}
       <Tabs defaultValue={0}>
-        <TabsList>
+        <TabsList className="max-w-full justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <TabsTrigger value={0}>
             <Package className="size-4" />
             Mezclas / Conos
@@ -554,6 +650,16 @@ export function GestorInventario() {
               {liquidos.length}
             </Badge>
           </TabsTrigger>
+          {/* Solicitudes de las sucursales — despachar mueve stock real (A15) */}
+          <TabsTrigger value={6}>
+            <PackagePlus className="size-4" />
+            Solicitudes
+            {solicitudesPendientes > 0 && (
+              <Badge className="ml-1 bg-amber-500 text-white text-xs hover:bg-amber-500">
+                {solicitudesPendientes}
+              </Badge>
+            )}
+          </TabsTrigger>
           <TabsTrigger value={2}>
             <Truck className="size-4" />
             Despacho
@@ -566,6 +672,13 @@ export function GestorInventario() {
             <QrCode className="size-4" />
             Códigos
           </TabsTrigger>
+          {/* Márgenes — solo ADMIN (expone costos y rentabilidad, C7/A42) */}
+          {esAdmin && (
+            <TabsTrigger value={5}>
+              <TrendingUp className="size-4" />
+              Márgenes
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* Tab Mezclas */}
@@ -590,7 +703,12 @@ export function GestorInventario() {
           />
         </TabsContent>
 
-        {/* Tab Despachos */}
+        {/* Tab Solicitudes de las sucursales */}
+        <TabsContent value={6} className="mt-4">
+          <SolicitudesBodega />
+        </TabsContent>
+
+        {/* Tab Despachos (envío ad-hoc, sin solicitud previa) */}
         <TabsContent value={2} className="mt-4">
           <FormularioDespacho />
         </TabsContent>
@@ -604,6 +722,13 @@ export function GestorInventario() {
         <TabsContent value={4} className="mt-4">
           <HistorialInventarioTab />
         </TabsContent>
+
+        {/* Tab Márgenes — solo ADMIN */}
+        {esAdmin && (
+          <TabsContent value={5} className="mt-4">
+            <MargenesTab />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* FAB flotante para escáner */}
@@ -688,9 +813,12 @@ export function GestorInventario() {
                           {new Date(d.fecha).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
                         </p>
                       </div>
-                      <Badge variant="secondary" className="shrink-0 tabular-nums font-semibold">
-                        {d.totalUnidades} u.
-                      </Badge>
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <Badge variant="secondary" className="tabular-nums font-semibold">
+                          {d.totalUnidades} u.
+                        </Badge>
+                        <EstadoDespachoBadge estado={d.estado} />
+                      </div>
                     </div>
                     <Button variant="outline" size="sm" className="w-full" onClick={() => setDetalleDespacho(d)}>
                       Ver detalle ({d.cantidadItems} producto{d.cantidadItems !== 1 ? "s" : ""})
@@ -705,6 +833,7 @@ export function GestorInventario() {
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="pb-3 pr-4 font-medium">Fecha y hora</th>
                     <th className="pb-3 pr-4 font-medium">Sucursal destino</th>
+                    <th className="pb-3 pr-4 font-medium text-center">Estado</th>
                     <th className="pb-3 pr-4 font-medium text-center">Productos</th>
                     <th className="pb-3 pr-4 font-medium text-right">Unidades</th>
                     <th className="pb-3 font-medium text-center">Detalle</th>
@@ -717,6 +846,9 @@ export function GestorInventario() {
                         {new Date(d.fecha).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
                       </td>
                       <td className="py-3 pr-4 font-medium">{d.destino}</td>
+                      <td className="py-3 pr-4 text-center">
+                        <EstadoDespachoBadge estado={d.estado} />
+                      </td>
                       <td className="py-3 pr-4 text-center">
                         <Badge variant="secondary" className="tabular-nums">{d.cantidadItems}</Badge>
                       </td>
@@ -849,6 +981,43 @@ export function GestorInventario() {
                   </p>
                 </div>
 
+                {/* Precio de venta — solo ADMIN y categorías de venta (Paquetes/Líquidos/Conos) */}
+                {precioEditable && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="form-precio-venta">Precio de venta (CLP)</Label>
+                    <Input
+                      id="form-precio-venta"
+                      type="number"
+                      min={0}
+                      value={form.precioVenta}
+                      onChange={(e) => setField("precioVenta", Number(e.target.value))}
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Solo el administrador puede modificar el precio de venta (las mezclas no tienen precio: son materia prima).
+                    </p>
+                  </div>
+                )}
+
+                {/* Costo — solo ADMIN, cualquier categoría (C7/A42): alimenta el
+                    reporte de Márgenes; antes solo se capturaba al crear el producto */}
+                {esAdmin && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="form-costo">Costo (CLP)</Label>
+                    <Input
+                      id="form-costo"
+                      type="number"
+                      min={0}
+                      value={form.costo}
+                      onChange={(e) => setField("costo", Number(e.target.value))}
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Costo de compra/producción por unidad — se usa en la pestaña Márgenes.
+                    </p>
+                  </div>
+                )}
+
                 {/* Vista previa del estado resultante */}
                 <div className="rounded-lg bg-muted/30 px-4 py-2.5 flex items-center justify-between">
                   <p className="text-xs text-muted-foreground">Estado resultante</p>
@@ -860,6 +1029,53 @@ export function GestorInventario() {
                   >
                     {calcularEstado(form.stockActual, form.stockCritico, Math.max(form.stockCritico * 5, form.stockActual + 1))}
                   </Badge>
+                </div>
+
+                {/* Merma explícita (C6/A40): baja de stock con causa propia, con
+                    trazabilidad separada del ajuste genérico (movimiento MERMA
+                    + historial). No pasa por el botón "Guardar Cambios". */}
+                <div className="rounded-lg border border-red-200 dark:border-red-900/50 px-4 py-3 space-y-2.5">
+                  <p className="text-xs font-bold uppercase tracking-wider text-red-600 dark:text-red-400">
+                    Registrar merma
+                  </p>
+                  <div className="grid grid-cols-[7rem_1fr] gap-2">
+                    <div className="space-y-1">
+                      <Label htmlFor="form-merma-cantidad" className="text-xs">Cantidad</Label>
+                      <Input
+                        id="form-merma-cantidad"
+                        type="number"
+                        min={1}
+                        inputMode="numeric"
+                        placeholder="0"
+                        value={mermaCantidad}
+                        onChange={(e) => setMermaCantidad(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="form-merma-motivo" className="text-xs">Motivo</Label>
+                      <Input
+                        id="form-merma-motivo"
+                        placeholder="Ej: vencido, dañado, derrame…"
+                        value={mermaMotivo}
+                        onChange={(e) => setMermaMotivo(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full text-red-600 border-red-300 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:border-red-800 dark:hover:bg-red-950/30"
+                    disabled={mutacionMerma.isPending}
+                    onClick={registrarMerma}
+                  >
+                    {mutacionMerma.isPending ? (
+                      <Loader2 className="size-3.5 mr-1 animate-spin" />
+                    ) : null}
+                    Descontar como merma
+                  </Button>
+                  <p className="text-[11px] text-muted-foreground">
+                    Queda registrada en el historial con motivo y usuario, separada de los ajustes.
+                  </p>
                 </div>
               </div>
 
@@ -1145,6 +1361,16 @@ interface MiniCardProps {
   colorAlerta?: string;
 }
 
+function EstadoDespachoBadge({ estado }: { estado: "ENVIADO" | "CONFIRMADO" | null }) {
+  if (estado === "CONFIRMADO") {
+    return <Badge variant="secondary" className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">Confirmado</Badge>;
+  }
+  if (estado === "ENVIADO") {
+    return <Badge variant="secondary" className="text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">Por confirmar</Badge>;
+  }
+  return <Badge variant="outline" className="text-[10px] text-muted-foreground">—</Badge>;
+}
+
 function MiniCard({ label, valor, alerta, colorAlerta }: MiniCardProps) {
   return (
     <Card>
@@ -1163,6 +1389,119 @@ function MiniCard({ label, valor, alerta, colorAlerta }: MiniCardProps) {
 }
 
 // ─── Subcomponente: Historial de ingresos de productos ───
+
+// ─── Tab Márgenes (C7/A42, solo ADMIN) ───────────────────────────────────────
+// Cruza costo vs precio de venta por producto. El costo se edita en el diálogo
+// "Ajustar Stock" (campo Costo, solo ADMIN).
+
+interface MargenProducto {
+  productoId:  number;
+  nombre:      string;
+  categoria:   string;
+  costo:       number;
+  precioVenta: number;
+  margen:      number;
+  margenPct:   number | null; // null = sin costo cargado
+}
+
+function MargenesTab() {
+  const { data: margenes = [], isLoading } = useQuery({
+    queryKey: ["bodega", "margenes"],
+    queryFn: () =>
+      apiGet<{ data: MargenProducto[] }>("/bodega/margenes").then((r) => r.data),
+    throwOnError: false,
+  });
+
+  const resumen = useMemo(() => {
+    const conCosto = margenes.filter((m) => m.margenPct !== null);
+    const sinCosto = margenes.length - conCosto.length;
+    const margenPromedio = conCosto.length > 0
+      ? Math.round(conCosto.reduce((s, m) => s + (m.margenPct ?? 0), 0) / conCosto.length)
+      : null;
+    return { sinCosto, margenPromedio };
+  }, [margenes]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (margenes.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16 text-center">
+        <TrendingUp className="mb-3 size-10 text-muted-foreground/30" />
+        <p className="text-sm text-muted-foreground">No hay productos vendibles con precio cargado</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Resumen */}
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        {resumen.margenPromedio !== null && (
+          <div className="rounded-lg border bg-card px-3 py-1.5">
+            <span className="text-muted-foreground">Margen promedio: </span>
+            <span className="font-bold tabular-nums">{resumen.margenPromedio}%</span>
+          </div>
+        )}
+        {resumen.sinCosto > 0 && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-3 py-1.5 text-amber-700 dark:text-amber-400">
+            {resumen.sinCosto} producto{resumen.sinCosto !== 1 ? "s" : ""} sin costo cargado — edítalo en "Ajustar Stock"
+          </div>
+        )}
+      </div>
+
+      {/* Tabla */}
+      <div className="rounded-xl border bg-card overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-muted-foreground">
+              <th className="px-4 py-3 font-medium">Producto</th>
+              <th className="px-4 py-3 font-medium">Categoría</th>
+              <th className="px-4 py-3 font-medium text-right">Costo</th>
+              <th className="px-4 py-3 font-medium text-right">Precio venta</th>
+              <th className="px-4 py-3 font-medium text-right">Margen</th>
+              <th className="px-4 py-3 font-medium text-right">Margen %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {margenes.map((m) => (
+              <tr key={m.productoId} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                <td className="px-4 py-2.5 font-medium whitespace-nowrap">{m.nombre}</td>
+                <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">{m.categoria}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums">
+                  {m.costo > 0 ? formatearCLP(m.costo) : (
+                    <Badge variant="outline" className="text-xs text-amber-700 border-amber-300 dark:text-amber-400 dark:border-amber-800">
+                      sin costo
+                    </Badge>
+                  )}
+                </td>
+                <td className="px-4 py-2.5 text-right tabular-nums">{formatearCLP(m.precioVenta)}</td>
+                <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${
+                  m.margenPct === null ? "text-muted-foreground" : m.margen < 0 ? "text-red-600" : "text-emerald-600"
+                }`}>
+                  {m.margenPct === null ? "—" : formatearCLP(m.margen)}
+                </td>
+                <td className={`px-4 py-2.5 text-right tabular-nums font-bold ${
+                  m.margenPct === null ? "text-muted-foreground"
+                    : m.margenPct < 0 ? "text-red-600"
+                    : m.margenPct < 20 ? "text-amber-600"
+                    : "text-emerald-600"
+                }`}>
+                  {m.margenPct === null ? "—" : `${m.margenPct}%`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function HistorialInventarioTab() {
   // Por defecto: últimos 7 días
@@ -1381,15 +1720,27 @@ function TablaInventario({ items, draftDe, onCampo, onEditar, onEliminar }: Tabl
               <CardContent className="px-4 py-3 space-y-3">
                 <div className="flex items-start justify-between gap-2">
                   <p className="flex-1 text-sm font-semibold truncate">{item.item}</p>
-                  <Button
-                    variant="ghost" size="icon"
-                    tabIndex={-1}
-                    className="size-8 shrink-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
-                    onClick={() => onEliminar(item.id)}
-                  >
-                    <Trash2 className="size-3.5" />
-                    <span className="sr-only">Eliminar</span>
-                  </Button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost" size="icon"
+                      tabIndex={-1}
+                      className="size-8"
+                      onClick={() => onEditar(item)}
+                      title="Ajuste manual / stock mínimo"
+                    >
+                      <Pencil className="size-3.5" />
+                      <span className="sr-only">Editar</span>
+                    </Button>
+                    <Button
+                      variant="ghost" size="icon"
+                      tabIndex={-1}
+                      className="size-8 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                      onClick={() => onEliminar(item.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                      <span className="sr-only">Eliminar</span>
+                    </Button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>

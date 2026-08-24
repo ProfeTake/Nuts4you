@@ -59,6 +59,17 @@ const ahoraHHMM = (): string => {
 let _nextVentaId = 1;
 let _nextMovId   = 10;
 
+/**
+ * Categoría del movimiento que registra el saldo de apertura (caja chica).
+ *
+ * Decisión del negocio: la caja chica NO participa del cuadre — el vendedor cuenta
+ * y entrega solo el efectivo de ventas, y esos billetes se quedan en el punto para
+ * el turno siguiente. El movimiento existe únicamente como referencia visible en la
+ * lista de movimientos, así que todo cálculo de efectivo esperado debe excluirlo
+ * (ver POSDashboard: `esperadoCaja`).
+ */
+export const CATEGORIA_APERTURA = "Apertura";
+
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 interface TurnoApiResponse {
@@ -84,13 +95,17 @@ export interface CierrePayload {
   totalCalculado:     number;
   diferenciaCaja:     number;
   stockFinal:         { productoId: number; cantidad: number }[];
+  // Detalle de ventas por producto (para el panel admin; el vendedor no ve montos).
+  ventaDetalle:       { productoId: number; cantidad: number; precioUnitario: number }[];
 }
 
-// Borrador del conteo en progreso (mezclas cocinadas + saldo final por producto).
+// Borrador del conteo en progreso (saldo final por producto).
 // Se persiste para que un refresco del navegador a mitad de turno no pierda el avance.
+// `cocinadas` quedó obsoleto (las mezclas ahora se cuentan por saldo final); se
+// mantiene opcional por compatibilidad con borradores persistidos antiguos.
 export interface BorradorConteo {
-  cocinadas: Record<number, number>;
-  stock:     Record<number, string>;
+  cocinadas?: Record<number, number>;
+  stock:      Record<number, string>;
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -110,7 +125,7 @@ interface CajaState {
     usuarioId: number,
     inventario: ItemInventarioInicial[]
   ) => Promise<void>;
-  cerrarTurno:            (payload: CierrePayload) => Promise<void>;
+  cerrarTurno:            (payload: CierrePayload) => Promise<boolean>;
   guardarCuadre:          (cuadre: CuadreCaja) => void;
   registrarVenta: (
     items: ItemCarrito[],
@@ -122,6 +137,7 @@ interface CajaState {
   agregarMovimiento:      (mov: Omit<MovimientoCaja, "id" | "hora">) => Promise<void>;
   eliminarMovimiento:     (id: number) => Promise<void>;
   cargarGastosDesdeAPI:   (turnoId: number) => Promise<void>;
+  cargarRetirosDesdeAPI:  (turnoId: number) => Promise<void>;
   guardarInventarioSaldo: (saldos: Record<number, number>) => void;
   guardarBorradorConteo:  (borrador: BorradorConteo) => void;
   sincronizarTurnoActivo: (pdvId: number) => Promise<void>;
@@ -152,10 +168,12 @@ export const useCajaStore = create<CajaState>()(
         set({
           turno:       turnoLocal,
           ventas:      [],
+          // Referencia informativa del fondo que quedó en el punto. NO suma al
+          // efectivo esperado del cuadre (ver CATEGORIA_APERTURA).
           movimientos: [{
             id: 1, tipo: "ingreso",
-            descripcion: "Saldo apertura de caja",
-            categoria: "Apertura", monto: saldoInicial, hora: ahoraHHMM(),
+            descripcion: "Saldo apertura de caja (no entra al cuadre)",
+            categoria: CATEGORIA_APERTURA, monto: saldoInicial, hora: ahoraHHMM(),
           }],
           inventarioInicial: inventario,
           inventarioSaldo:   {},
@@ -188,20 +206,36 @@ export const useCajaStore = create<CajaState>()(
       },
 
       // ─── Cerrar turno ───────────────────────────────────────────────────────
+      // El cierre es la operación crítica del turno: SOLO se marca CERRADO (y se
+      // limpia el borrador) si el backend confirma la persistencia. Si falla, se
+      // devuelve false SIN tocar el estado local, para que la UI muestre el error
+      // y el vendedor pueda reintentar — antes se marcaba CERRADO igual y la UI
+      // cerraba sesión, dejando el turno ABIERTO para siempre en el servidor
+      // (cierres "fantasma" que nunca llegaban a Sucursales). No se encola en la
+      // cola offline en memoria: para el cierre es preferible el reintento
+      // explícito a un envío diferido que se pierde al cerrar el navegador.
       cerrarTurno: async (payload) => {
         const { turno } = get();
+        if (!turno) return false;
 
-        set((s) => ({
-          turno: s.turno ? { ...s.turno, estado: "CERRADO" as const } : null,
-          borradorConteo: null,
-        }));
-
-        if (turno) {
-          try {
-            await apiPatch<unknown>(`/pos/turnos/${turno.id}/cerrar`, payload);
-          } catch {
-            encolarOp("PATCH", `/pos/turnos/${turno.id}/cerrar`, payload)
-          }
+        try {
+          await apiPatch<unknown>(`/pos/turnos/${turno.id}/cerrar`, payload);
+          // El turno terminó: se limpia TODO su estado en vez de dejarlo marcado
+          // "CERRADO". Antes quedaba persistido en localStorage y sobrevivía al
+          // logout; cualquier pantalla que distinguiera "sin turno" de "turno
+          // cerrado" se quedaba pegada en el turno viejo al volver a entrar.
+          set({
+            turno:             null,
+            ventas:            [],
+            movimientos:       [],
+            inventarioInicial: [],
+            inventarioSaldo:   {},
+            cuadreCaja:        null,
+            borradorConteo:    null,
+          });
+          return true;
+        } catch {
+          return false;
         }
       },
 
@@ -234,12 +268,19 @@ export const useCajaStore = create<CajaState>()(
       },
 
       // ─── Movimientos de caja ────────────────────────────────────────────────
+      // Los RETIROS no se crean por aquí: los registra el admin/supervisor desde
+      // el panel (POST /pos/turnos/:id/retiros) y el POS los lee con
+      // `cargarRetirosDesdeAPI`. El vendedor nunca retira dinero del punto.
       agregarMovimiento: async (mov) => {
+        if (mov.tipo === "retiro") {
+          console.warn("[caja] los retiros los registra el admin/supervisor, no el POS");
+          return;
+        }
         const localId = _nextMovId++;
         const nuevo: MovimientoCaja = { ...mov, id: localId, hora: ahoraHHMM() };
         set((s) => ({ movimientos: [...s.movimientos, nuevo] }));
 
-        // Solo los gastos se persisten en BD (retiros e ingresos tienen su propio flujo)
+        // Solo los gastos se persisten en BD (los ingresos tienen su propio flujo)
         if (mov.tipo === "gasto") {
           const turnoId = get().turno?.id;
           if (turnoId) {
@@ -266,6 +307,9 @@ export const useCajaStore = create<CajaState>()(
       eliminarMovimiento: async (id) => {
         if (id === 1) return; // saldo de apertura: intocable
         const mov = get().movimientos.find((m) => m.id === id);
+        // Los retiros del admin son solo lectura para el vendedor: borrarlos aquí
+        // solo desincronizaría su cuadre del que calcula el servidor.
+        if (mov?.soloLectura) return;
         set((s) => ({ movimientos: s.movimientos.filter((m) => m.id !== id) }));
 
         // Eliminar del backend si tiene backendId y es un gasto
@@ -295,13 +339,44 @@ export const useCajaStore = create<CajaState>()(
             hora:        "—",
           }));
           set((s) => ({
-            // Conservar apertura (id=1) + retiros locales, reemplazar gastos con los de BD
+            // Conservar apertura (id=1) + retiros, reemplazar gastos con los de BD
             movimientos: [
               ...s.movimientos.filter((m) => m.tipo !== "gasto"),
               ...gastosApi,
             ],
           }));
         } catch { /* si falla, se muestran solo los gastos locales */ }
+      },
+
+      /**
+       * Trae los retiros del turno desde la BD. Los registra el admin/supervisor
+       * durante su visita al punto, así que son la única forma que tiene el POS
+       * de enterarse: sin esto el vendedor cuenta menos efectivo del esperado y
+       * declara un faltante fantasma del porte del retiro.
+       */
+      cargarRetirosDesdeAPI: async (turnoId) => {
+        try {
+          const res = await apiGet<{
+            data: { id: number; monto: number; descripcion: string | null; realizadoPor: string; fechaHora: string }[]
+          }>(`/pos/turnos/${turnoId}/retiros`);
+          const retirosApi: MovimientoCaja[] = res.data.map((r) => ({
+            id:           _nextMovId++,
+            backendId:    r.id,
+            tipo:         "retiro" as const,
+            descripcion:  r.descripcion ?? "Retiro de efectivo",
+            categoria:    "Retiro del punto",
+            monto:        r.monto,
+            hora:         r.fechaHora,
+            soloLectura:  true,
+            realizadoPor: r.realizadoPor,
+          }));
+          set((s) => ({
+            movimientos: [
+              ...s.movimientos.filter((m) => m.tipo !== "retiro"),
+              ...retirosApi,
+            ],
+          }));
+        } catch { /* sin red: se conserva lo que ya se había cargado */ }
       },
 
       guardarInventarioSaldo: (saldos) => set({ inventarioSaldo: saldos }),
@@ -335,6 +410,29 @@ export const useCajaStore = create<CajaState>()(
                   : null,
               }));
             }
+            return;
+          }
+
+          // El servidor (accesible) NO tiene un turno ABIERTO para este PDV, pero
+          // localmente sí. Es un turno "fantasma": la apertura nunca se persistió
+          // (quedó con id temporal), o el turno se cerró/eliminó en el servidor, o
+          // se reseteó la BD. Se descarta el estado local para que el vendedor
+          // vuelva al asistente de apertura y abra un turno que SÍ quede en la BD
+          // (si no, el POS muestra un turno que no existe para Sucursales, cierre
+          // preventivo, nómina, etc.).
+          // Excepción: si hay una apertura encolada offline, NO se descarta —
+          // se persistirá al reconectar.
+          const aperturaPendiente = _pendingQueue.some((op) => op.ruta === "/pos/turnos");
+          if (!aperturaPendiente) {
+            set({
+              turno:             null,
+              ventas:            [],
+              movimientos:       [],
+              inventarioInicial: [],
+              inventarioSaldo:   {},
+              cuadreCaja:        null,
+              borradorConteo:    null,
+            });
           }
         } catch {
           /* sin red o error: se mantiene el estado local (offline-first) */

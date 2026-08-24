@@ -128,6 +128,15 @@ function mesActual(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Fecha de hoy en Chile como YYYY-MM-DD (espejo del helper del backend).
+ *  La grilla compara días calendario chilenos: usar la zona del navegador
+ *  desfasaría el corte "pasado vs futuro" para usuarios fuera de Chile. */
+function fechaHoyChile(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Santiago", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+}
+
 /** Devuelve todos los días de un mes dado como strings YYYY-MM-DD */
 function diasDelMes(mesISO: string): string[] {
   const [anio, mes] = mesISO.split("-").map(Number);
@@ -516,7 +525,13 @@ function ultimoDiaMes(mes: string): string {
 // Componente principal
 // ══════════════════════════════════════════════════════════════════════════════
 
-export function HorariosTurnos() {
+interface HorariosTurnosProps {
+  /** Modo consulta: solo ver la grilla, sin importar/editar/publicar.
+   *  Usado por el rol SUPERVISOR (el backend también bloquea las mutaciones). */
+  soloLectura?: boolean;
+}
+
+export function HorariosTurnos({ soloLectura = false }: HorariosTurnosProps = {}) {
   const queryClient = useQueryClient();
 
   const [mes, setMes]                               = useState(mesActual);
@@ -542,7 +557,7 @@ export function HorariosTurnos() {
 
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const opcionesMes = useMemo(generarOpcionesMes, []);
+  const opcionesMes = useMemo(() => generarOpcionesMes(), []);
 
   // ── Queries ──────────────────────────────────────────────────────────────
 
@@ -558,11 +573,17 @@ export function HorariosTurnos() {
       apiGet<PersonalAPI>("/rrhh/personal").then((r) =>
         r.data.filter((p) => p.activo)
       ),
+    // En modo consulta no se editan turnos, así que no se necesita (ni se puede,
+    // por permisos) cargar el listado de personal.
+    enabled: !soloLectura,
   });
 
-  const pdvs: PDV[]         = horariosData?.pdvs ?? [];
-  const grid                = horariosData?.grid ?? {};
-  const dias                = useMemo(() => diasDelMes(mes), [mes]);
+  // Memoizados porque `?? []` / `?? {}` crean un objeto nuevo en cada render:
+  // sin esto los useCallback/useMemo que dependen de ellos se recreaban siempre,
+  // arrastrando a re-renderizar toda la grilla del mes en cada tecla.
+  const pdvs: PDV[] = useMemo(() => horariosData?.pdvs ?? [], [horariosData]);
+  const grid        = useMemo(() => horariosData?.grid ?? {}, [horariosData]);
+  const dias        = useMemo(() => diasDelMes(mes), [mes]);
 
   // ── Mutaciones ────────────────────────────────────────────────────────────
 
@@ -783,7 +804,9 @@ export function HorariosTurnos() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Horarios de Personal</h1>
         <p className="text-sm text-muted-foreground">
-          Planificación mensual de turnos por sucursal — importa desde Excel y compara con los turnos reales.
+          {soloLectura
+            ? "Consulta la planificación mensual de turnos por sucursal (solo lectura)."
+            : "Planificación mensual de turnos por sucursal — importa desde Excel y compara con los turnos reales."}
         </p>
       </div>
 
@@ -818,58 +841,63 @@ export function HorariosTurnos() {
           </Button>
         </div>
 
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => descargarPlantilla(mes, pdvs, etiquetaMes)}
-          disabled={pdvs.length === 0}
-          className="gap-1.5"
-        >
-          <Download className="size-4" />
-          Descargar Plantilla
-        </Button>
+        {/* Acciones de edición: ocultas en modo consulta (SUPERVISOR) */}
+        {!soloLectura && (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => descargarPlantilla(mes, pdvs, etiquetaMes)}
+              disabled={pdvs.length === 0}
+              className="gap-1.5"
+            >
+              <Download className="size-4" />
+              Descargar Plantilla
+            </Button>
 
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => setImportModalAbierto(true)}
-          className="gap-1.5"
-        >
-          <FileSpreadsheet className="size-4" />
-          Importar Excel
-        </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setImportModalAbierto(true)}
+              className="gap-1.5"
+            >
+              <FileSpreadsheet className="size-4" />
+              Importar Excel
+            </Button>
 
-        <Button
-          size="sm"
-          onClick={abrirAutoFill}
-          disabled={personalData.length === 0 || pdvs.length === 0}
-          className="gap-1.5"
-        >
-          <Wand2 className="size-4" />
-          Generar automático
-        </Button>
+            <Button
+              size="sm"
+              onClick={abrirAutoFill}
+              disabled={personalData.length === 0 || pdvs.length === 0}
+              className="gap-1.5"
+            >
+              <Wand2 className="size-4" />
+              Generar automático
+            </Button>
 
-        {hayDatos && (
-          <Button
-            size="sm"
-            onClick={() => setPublicarOpen(true)}
-            className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
-          >
-            <Send className="size-4" />
-            Publicar horario
-          </Button>
-        )}
+            {hayDatos && (
+              <Button
+                size="sm"
+                onClick={() => setPublicarOpen(true)}
+                className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+              >
+                <Send className="size-4" />
+                Publicar horario
+              </Button>
+            )}
 
-        {hayDatos && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setConfirmarLimpiar(true)}
-            className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50 hover:border-red-400 dark:hover:bg-red-950/30"
-          >
-            <Trash2 className="size-4" />
-            Limpiar mes
-          </Button>
+            {hayDatos && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmarLimpiar(true)}
+                className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50 hover:border-red-400 dark:hover:bg-red-950/30"
+              >
+                <Trash2 className="size-4" />
+                Limpiar mes
+              </Button>
+            )}
+          </>
         )}
 
       </div>
@@ -885,6 +913,7 @@ export function HorariosTurnos() {
           dias={dias}
           pdvs={pdvs}
           grid={grid}
+          soloLectura={soloLectura}
           onEditarCelda={abrirEdicion}
           onAgregarCelda={abrirCrear}
           onBulkCrear={(items) => mutDragFill.mutate(items)}
@@ -917,6 +946,12 @@ export function HorariosTurnos() {
           <div className="flex items-center gap-1.5">
             <span className="inline-flex size-5 items-center justify-center rounded bg-slate-100 text-slate-600 font-bold text-[10px] dark:bg-slate-800 dark:text-slate-300">R</span>
             <span>Solo real (sin plan)</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-flex items-center gap-0.5 rounded bg-red-100 text-red-700 text-[10px] px-1 py-0.5 dark:bg-red-900/40 dark:text-red-300">
+              <X className="size-2.5" />N
+            </span>
+            <span>No llegó (día pasado sin turno)</span>
           </div>
         </div>
       )}
@@ -1476,7 +1511,8 @@ export function HorariosTurnos() {
                       checked={autoFillVends.has(v.id)}
                       onChange={(e) => {
                         const s = new Set(autoFillVends);
-                        e.target.checked ? s.add(v.id) : s.delete(v.id);
+                        if (e.target.checked) s.add(v.id);
+                        else s.delete(v.id);
                         setAutoFillVends(s);
                       }}
                       className="accent-primary"
@@ -1498,7 +1534,8 @@ export function HorariosTurnos() {
                       checked={autoFillPDVs.has(p.id)}
                       onChange={(e) => {
                         const s = new Set(autoFillPDVs);
-                        e.target.checked ? s.add(p.id) : s.delete(p.id);
+                        if (e.target.checked) s.add(p.id);
+                        else s.delete(p.id);
                         setAutoFillPDVs(s);
                       }}
                       className="accent-primary"
@@ -1560,12 +1597,13 @@ interface GrillaProps {
   dias: string[];
   pdvs: PDV[];
   grid: Record<string, Record<number, CeldaHorario>>;
+  soloLectura?: boolean;
   onEditarCelda: (celdaId: number, pdvNombre: string, fecha: string, vendedorActualId: number | null) => void;
   onAgregarCelda: (pdvId: number, pdvNombre: string, fecha: string) => void;
   onBulkCrear: (items: { fecha: string; pdvId: number; usuarioId: number }[]) => void;
 }
 
-function GrillaCalendario({ dias, pdvs, grid, onEditarCelda, onAgregarCelda, onBulkCrear }: GrillaProps) {
+function GrillaCalendario({ dias, pdvs, grid, soloLectura = false, onEditarCelda, onAgregarCelda, onBulkCrear }: GrillaProps) {
   const [dragInfo, setDragInfo] = useState<{
     pdvId: number;
     fechaInicio: string;
@@ -1693,6 +1731,7 @@ function GrillaCalendario({ dias, pdvs, grid, onEditarCelda, onAgregarCelda, onB
                         pdvNombre={pdv.nombre}
                         pdvId={pdv.id}
                         fecha={fecha}
+                        soloLectura={soloLectura}
                         onEditar={onEditarCelda}
                         onAgregar={onAgregarCelda}
                         onDragStart={handleDragStart}
@@ -1718,6 +1757,7 @@ interface CeldaVistaProps {
   pdvNombre: string;
   pdvId: number;
   fecha: string;
+  soloLectura?: boolean;
   onEditar: (celdaId: number, pdvNombre: string, fecha: string, vendedorActualId: number | null) => void;
   onAgregar: (pdvId: number, pdvNombre: string, fecha: string) => void;
   onDragStart: (pdvId: number, fecha: string, vendedorId: number) => void;
@@ -1725,8 +1765,12 @@ interface CeldaVistaProps {
   isDragging: boolean;
 }
 
-function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar, onDragStart, dragHighlight, isDragging }: CeldaVistaProps) {
+function CeldaVista({ celda, pdvNombre, pdvId, fecha, soloLectura = false, onEditar, onAgregar, onDragStart, dragHighlight, isDragging }: CeldaVistaProps) {
   if (!celda) {
+    // En modo consulta, un día sin turno no ofrece el botón "+" de asignar.
+    if (soloLectura) {
+      return <span className="text-muted-foreground/25">—</span>;
+    }
     return (
       <button
         onClick={() => !isDragging && onAgregar(pdvId, pdvNombre, fecha)}
@@ -1769,7 +1813,8 @@ function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar, onDra
     return (
       <div className="flex flex-col items-center gap-0.5">
         <button
-          className="group"
+          className="group disabled:cursor-default"
+          disabled={soloLectura}
           title={`${vendedorReal.nombre} — Confirmado`}
           onClick={() =>
             id !== null && onEditar(id, pdvNombre, fecha, vendedorPlaneado.id)
@@ -1798,6 +1843,8 @@ function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar, onDra
       <div className="flex flex-col items-center gap-0.5">
         <div className="flex items-center gap-0.5">
           <button
+            className="disabled:cursor-default"
+            disabled={soloLectura}
             title={`Planeado: ${vendedorPlaneado.nombre}`}
             onClick={() =>
               id !== null && onEditar(id, pdvNombre, fecha, vendedorPlaneado.id)
@@ -1827,6 +1874,27 @@ function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar, onDra
     );
   }
 
+  // Caso: planeado en fecha ya pasada y sin turno real → inasistencia (C16/A37).
+  // Antes se pintaba igual que un turno futuro, ocultando los no-show.
+  if (vendedorPlaneado && !vendedorReal && fecha < fechaHoyChile()) {
+    return (
+      <button
+        title={`No llegó: ${vendedorPlaneado.nombre} (planeado, sin turno abierto)`}
+        onClick={() => !isDragging && id !== null && onEditar(id, pdvNombre, fecha, vendedorPlaneado.id)}
+        disabled={soloLectura}
+        className="group/badge disabled:cursor-default"
+      >
+        <Badge
+          variant="outline"
+          className="text-[10px] px-1.5 py-0.5 h-auto bg-red-100 text-red-700 border-red-300 dark:bg-red-900/40 dark:text-red-300 dark:border-red-700 group-hover/badge:brightness-95 transition-all"
+        >
+          <X className="size-2.5 mr-0.5" />
+          {iniciales(vendedorPlaneado.nombre)}
+        </Badge>
+      </button>
+    );
+  }
+
   // Caso: solo planeado (sin real aún) — publicado o pendiente
   if (vendedorPlaneado && !vendedorReal) {
     return (
@@ -1834,7 +1902,8 @@ function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar, onDra
         <button
           title={publicado ? `Publicado: ${vendedorPlaneado.nombre}` : `Planeado: ${vendedorPlaneado.nombre}`}
           onClick={() => !isDragging && id !== null && onEditar(id, pdvNombre, fecha, vendedorPlaneado.id)}
-          className="group/badge"
+          disabled={soloLectura}
+          className="group/badge disabled:cursor-default"
         >
           <Badge
             variant="outline"
@@ -1847,16 +1916,18 @@ function CeldaVista({ celda, pdvNombre, pdvId, fecha, onEditar, onAgregar, onDra
             {iniciales(vendedorPlaneado.nombre)}
           </Badge>
         </button>
-        {/* Manija de arrastre estilo Excel */}
-        <div
-          className={`absolute -bottom-1 -right-1 size-2.5 rounded-[2px] cursor-crosshair opacity-0 group-hover/drag:opacity-100 transition-opacity z-10 ${publicado ? "bg-emerald-500" : "bg-blue-500"}`}
-          title="Arrastrar para rellenar celdas vacías hacia abajo"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onDragStart(pdvId, fecha, vendedorPlaneado.id);
-          }}
-        />
+        {/* Manija de arrastre estilo Excel — solo en modo edición */}
+        {!soloLectura && (
+          <div
+            className={`absolute -bottom-1 -right-1 size-2.5 rounded-[2px] cursor-crosshair opacity-0 group-hover/drag:opacity-100 transition-opacity z-10 ${publicado ? "bg-emerald-500" : "bg-blue-500"}`}
+            title="Arrastrar para rellenar celdas vacías hacia abajo"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDragStart(pdvId, fecha, vendedorPlaneado.id);
+            }}
+          />
+        )}
       </div>
     );
   }
